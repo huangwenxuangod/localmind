@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(tavily-search)",
+      "Skill(tavily-search:*)",
+      "Bash(bun create *)"
+    ]
+  }
+}
