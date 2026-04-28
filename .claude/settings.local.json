@@ -3,7 +3,11 @@
     "allow": [
       "Skill(tavily-search)",
       "Skill(tavily-search:*)",
-      "Bash(bun create *)"
+      "Bash(bun create *)",
+      "Bash(bun add *)",
+      "Bash(bun run *)",
+      "Bash(curl -s http://localhost:3000)",
+      "Bash(curl -s -X POST http://localhost:3000/api/run -H 'Content-Type: application/json' -d '{\"userInput\":\"今天下午3点到6点，西湖附近，2个人吃晚饭逛街\"}' --max-time 15)"
     ]
   }
 }
