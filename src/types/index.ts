@@ -63,6 +63,43 @@ export interface ParsedIntent {
   corrections: string[];    // 自动修正说明
 }
 
+// ---- Trip Planning Demo Domain ----
+
+export type ValidationStatus = "pass" | "warn" | "fail";
+
+export interface TripBrief {
+  userGoal: string;
+  city: string;
+  area: string;
+  timeWindow: {
+    startTime: string;
+    endTime: string;
+    source: "explicit" | "inferred" | "default";
+    confidence: number;
+  };
+  participants: {
+    adults: number;
+    children: number;
+    notes: string[];
+  };
+  preferences: string[];
+  constraints: string[];
+  assumptions: string[];
+  ambiguities: string[];
+}
+
+export interface PlanValidationItem {
+  label: string;
+  status: ValidationStatus;
+  detail: string;
+}
+
+export interface PlanReasoning {
+  summary: string;
+  whyThisWorks: string[];
+  hiddenInsights: string[];
+}
+
 // ---- Merchant ----
 
 export interface Merchant {
@@ -94,12 +131,17 @@ export interface Task {
   planId: string;
   type: TaskType;
   businessType: BusinessType;
+  title?: string;
+  description?: string;
   merchant: Merchant | null;
   candidateMerchants: Merchant[];
   startTime: string;        // ISO 8601
   endTime: string;          // ISO 8601
   durationMin: number;
   travelToNextMin: number;  // 到下一个任务的通勤时间
+  whyRecommended?: string;
+  suitabilityTags?: string[];
+  validation?: PlanValidationItem[];
   status: TaskStatus;
   retryCount: number;
   failureReason: string | null;
@@ -112,9 +154,12 @@ export interface Plan {
   id: string;
   sessionId: string;
   intent: ParsedIntent;
+  brief?: TripBrief;
   tasks: Task[];
   status: PlanStatus;
   constraintLevel: number;   // 约束降级层级 0=满约束 1=放大半径 2=放宽业态 3=放宽偏好
+  reasoning?: PlanReasoning;
+  validation?: PlanValidationItem[];
   createdAt: string;
   updatedAt: string;
 }

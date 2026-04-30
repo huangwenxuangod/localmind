@@ -4,9 +4,8 @@ import type {
   AgentState, AgentPhase, SSEEvent, SSEEventType,
   TaskUpdatePayload, Task, TaskStatus, ParsedIntent, Plan,
 } from "@/types";
-import { parseIntentWithLLM } from "../tools/parser";
-import { shouldLoadFullMemory } from "../tools/parser";
-import { buildPlan, replanWithDegradedConstraints } from "../rules/planner";
+import { buildDemoItineraryPlan } from "../rules/itinerary";
+import { replanWithDegradedConstraints } from "../rules/planner";
 import { preValidatePlan } from "../tools/validator";
 import { executePlanParallel } from "../tools/executor";
 import { upsertSession, upsertPlan, upsertTasks, insertLog, getUserMemory, upsertUserMemory } from "@/lib/db/queries";
@@ -69,22 +68,14 @@ export async function runAgent(
     state = transition(state, "parsing");
     emit(emitter, "parsing_start", { sessionId });
 
-    // Agent Memory：加载用户历史记忆
-    const memory = await getUserMemory(sessionId);
-    const loadFull = shouldLoadFullMemory(userInput);
-    const memoryContext = loadFull && memory ? memory.memoryMd : (memory?.summary ?? "");
-
-    const intent = await parseIntentWithLLM(userInput, memoryContext || undefined);
-
-    state = { ...state, intent };
-    emit(emitter, "parsing_done", { intent });
+    const plan = buildDemoItineraryPlan(userInput, sessionId);
+    state = { ...state, intent: plan.intent, plan };
+    emit(emitter, "parsing_done", { intent: plan.intent, brief: plan.brief });
 
     // ── Phase 2: Plan ───────────────────────────────────────────
     state = transition(state, "planning");
     emit(emitter, "planning_start", {});
 
-    let plan = buildPlan({ intent, sessionId, constraintLevel: 0 });
-    state = { ...state, plan };
     emit(emitter, "planning_done", { plan });
 
     await upsertPlan(plan);
@@ -95,59 +86,18 @@ export async function runAgent(
       message: "方案已生成", payload: { taskCount: plan.tasks.length },
     });
 
-    // ── Phase 3: Pre-validate ───────────────────────────────────
+    // ── Phase 3: Persisted validation report ────────────────────
     state = transition(state, "pre_validating");
     emit(emitter, "validation_start", { taskCount: plan.tasks.length });
 
-    let validationReport = await preValidatePlan(plan);
-    plan = { ...plan, tasks: validationReport.updatedTasks, status: "validating" };
-    state = { ...state, plan };
-
     emit(emitter, "validation_done", {
-      allReady: validationReport.allReady,
-      failedCount: validationReport.failedTaskIds.length,
+      allReady: plan.validation?.every((item) => item.status !== "fail") ?? true,
+      failedCount: plan.validation?.filter((item) => item.status === "fail").length ?? 0,
+      report: plan.validation ?? [],
     });
 
-    await upsertTasks(validationReport.updatedTasks);
-
-    // 预校验失败的核心任务 → 梯度降级重排
-    while (!validationReport.allReady && state.iteration < state.maxIterations) {
-      const failedCoreTasks = plan.tasks.filter(
-        (t: Task) => t.type === "core" && t.status === "failed"
-      );
-
-      if (failedCoreTasks.length === 0) break; // 只有弱任务失败，可接受
-
-      state = { ...state, iteration: state.iteration + 1 };
-      emit(emitter, "replanning_start", {
-        reason: "预校验核心任务失败",
-        constraintLevel: state.constraintLevel + 1,
-        iteration: state.iteration,
-      });
-
-      plan = replanWithDegradedConstraints(plan, failedCoreTasks[0].id);
-      state = { ...state, plan, constraintLevel: plan.constraintLevel };
-      validationReport = await preValidatePlan(plan);
-      plan = { ...plan, tasks: validationReport.updatedTasks };
-      state = { ...state, plan };
-
-      emit(emitter, "replanning_done", { plan });
-
-      await upsertPlan(plan);
-      await upsertTasks(plan.tasks);
-      insertLog({
-        sessionId, planId: plan.id, level: "replan", phase: "replanning",
-        message: "梯度重排完成（预校验）",
-        payload: { constraintLevel: plan.constraintLevel, iteration: state.iteration },
-      });
-    }
-
-    // 预校验后方案就绪
-    plan = { ...plan, status: "ready" };
     state = { ...state, plan, phase: "awaiting_confirm" };
     emit(emitter, "plan_ready", { plan });
-    await upsertPlan(plan);
-    await upsertSession(sessionId, { currentPlanId: plan.id });
 
     return state;
 

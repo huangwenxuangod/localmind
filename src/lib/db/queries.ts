@@ -1,10 +1,29 @@
 import { db } from "./supabase";
-import type { Plan, Task, ExecutionResult, Session, PlanStatus, TaskStatus, TaskType, BusinessType } from "@/types";
+import type {
+  Plan,
+  Task,
+  ExecutionResult,
+  Session,
+  PlanStatus,
+  TaskStatus,
+  TaskType,
+  BusinessType,
+  ParsedIntent,
+  TripBrief,
+  PlanReasoning,
+  PlanValidationItem,
+} from "@/types";
+
+type StoredPlanIntent = ParsedIntent & {
+  __brief?: TripBrief;
+  __reasoning?: PlanReasoning;
+  __validation?: PlanValidationItem[];
+};
 
 type PlanRow = {
   id: string;
   session_id: string;
-  intent: Plan["intent"];
+  intent: StoredPlanIntent;
   status: PlanStatus;
   constraint_level: number;
   created_at: string;
@@ -37,13 +56,17 @@ type SessionRow = {
 };
 
 function mapPlan(row: PlanRow): Plan {
+  const { __brief, __reasoning, __validation, ...intent } = row.intent;
   return {
     id: row.id,
     sessionId: row.session_id,
-    intent: row.intent,
+    intent,
+    brief: __brief,
     tasks: [],
     status: row.status,
     constraintLevel: row.constraint_level,
+    reasoning: __reasoning,
+    validation: __validation,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -55,6 +78,8 @@ function mapTask(row: TaskRow): Task {
     planId: row.plan_id,
     type: row.type,
     businessType: row.business_type,
+    title: row.merchant?.name ?? row.business_type,
+    description: row.business_type,
     merchant: row.merchant,
     candidateMerchants: row.candidate_merchants,
     startTime: row.start_time,
@@ -94,21 +119,27 @@ export async function upsertSession(
     row.current_plan_id = update.currentPlanId;
   }
   const { error } = await db.from("sessions").upsert(row);
-  if (error) console.error("[DB] upsertSession failed:", error.message);
+  if (error) throw new Error(`[DB] upsertSession failed: ${error.message}`);
 }
 
 // ── Plans ─────────────────────────────────────────────────────────────────────
 
 export async function upsertPlan(plan: Plan) {
+  const storedIntent: StoredPlanIntent = {
+    ...plan.intent,
+    __brief: plan.brief,
+    __reasoning: plan.reasoning,
+    __validation: plan.validation,
+  };
   const { error } = await db.from("plans").upsert({
     id: plan.id,
     session_id: plan.sessionId,
-    intent: plan.intent,
+    intent: storedIntent,
     status: plan.status,
     constraint_level: plan.constraintLevel,
     updated_at: new Date().toISOString(),
   });
-  if (error) console.error("[DB] upsertPlan failed:", error.message);
+  if (error) throw new Error(`[DB] upsertPlan failed: ${error.message}`);
 }
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
@@ -133,7 +164,7 @@ export async function upsertTasks(tasks: Task[]) {
     updated_at: new Date().toISOString(),
   }));
   const { error } = await db.from("tasks").upsert(rows);
-  if (error) console.error("[DB] upsertTasks failed:", error.message);
+  if (error) throw new Error(`[DB] upsertTasks failed: ${error.message}`);
 }
 
 // ── Executions ────────────────────────────────────────────────────────────────
@@ -147,7 +178,7 @@ export async function insertExecution(result: ExecutionResult, planId: string) {
     failure_reason: result.failureReason ?? null,
     executed_at: result.executedAt,
   });
-  if (error) console.error("[DB] insertExecution failed:", error.message);
+  if (error) throw new Error(`[DB] insertExecution failed: ${error.message}`);
 }
 
 // ── User Memory (Agent Memory) ────────────────────────────────────────────────
@@ -182,7 +213,7 @@ export async function upsertUserMemory(memory: UserMemory) {
     summary: memory.summary,
     updated_at: new Date().toISOString(),
   });
-  if (error) console.error("[DB] upsertUserMemory failed:", error.message);
+  if (error) throw new Error(`[DB] upsertUserMemory failed: ${error.message}`);
 }
 
 // ── Queries ────────────────────────────────────────────────────────────────────

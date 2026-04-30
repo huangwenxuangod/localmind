@@ -1,76 +1,46 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
-import type { SSEEvent, Plan, Task, TaskUpdatePayload } from "@/types";
 
-type PhaseLabel = {
-  [key: string]: string;
-};
+import { useEffect, useRef, useState } from "react";
+import type { Plan, PlanValidationItem, SSEEvent, Task, TaskUpdatePayload } from "@/types";
 
-const PHASE_LABELS: PhaseLabel = {
-  parsing_start: "🧠 正在解析行程需求...",
-  parsing_done: "✅ 需求解析完成",
-  planning_start: "📅 正在规划行程方案...",
-  planning_done: "✅ 行程方案生成完成",
-  validation_start: "🔍 正在预校验商家...",
-  validation_done: "✅ 预校验完成",
-  plan_ready: "🎯 方案就绪，等待确认",
-  execution_start: "🚀 并行执行所有任务...",
-  replanning_start: "♻️ 触发梯度重排...",
-  replanning_done: "✅ 重排方案已更新",
-  execution_complete: "🎉 行程履约全部完成！",
-  error: "❌ 发生错误",
-};
+const EXAMPLE_INPUTS = [
+  "周六上午 9 点，小明迎来了难得周末双休，他给美团发了一条消息：今天下午是空的，想和老婆孩子出去玩几个小时，别离家太远，帮我安排一下。家庭场景：孩子 5 岁，老婆最近在减肥",
+  "明天下午2点到6点，在西湖附近，我和朋友2个人想逛街吃晚饭，不吃辣",
+  "今天下午是空的，想带孩子在家附近轻松玩一下，最好别太累，顺便吃点清淡的",
+];
 
-const STATUS_COLORS: Record<string, string> = {
-  pending: "bg-gray-100 text-gray-500",
-  validating: "bg-blue-50 text-blue-600",
-  ready: "bg-blue-100 text-blue-700",
-  executing: "bg-yellow-50 text-yellow-600",
-  success: "bg-green-100 text-green-700",
-  failed: "bg-red-100 text-red-600",
-  replaced: "bg-purple-100 text-purple-700",
-  replanning: "bg-orange-100 text-orange-600",
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  pending: "待执行",
-  validating: "校验中",
-  ready: "就绪",
+const STATUS_LABEL: Record<string, string> = {
+  pending: "待确认",
+  ready: "已校验",
   executing: "执行中",
-  success: "✓ 完成",
-  failed: "✗ 失败",
-  replaced: "↩ 已替换",
+  success: "已执行",
+  failed: "失败",
+  replaced: "已替换",
+  validating: "校验中",
   replanning: "重排中",
 };
 
-const TYPE_ICONS: Record<string, string> = {
-  restaurant: "🍽️",
-  cafe: "☕",
-  shopping: "🛍️",
-  entertainment: "🎮",
-  leisure: "🌸",
-  sport: "🏃",
-  culture: "🏛️",
-};
+function formatTime(iso: string) {
+  return new Date(iso).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
 
-const EXAMPLE_INPUTS = [
-  "明天下午2点到6点，在西湖附近，我和朋友2个人想逛街吃晚饭，不吃辣",
-  "今天上午10点出发，一家三口亲子游，想吃饭+逛商场+看电影，开车出行",
-  "下午3点到8点，情侣约会，想喝下午茶+晚饭+密室逃脱，预算中等",
-];
+function validationClass(status: PlanValidationItem["status"]) {
+  if (status === "pass") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "warn") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-red-200 bg-red-50 text-red-700";
+}
 
 export default function HomePage() {
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(EXAMPLE_INPUTS[0]);
+  const [plan, setPlan] = useState<Plan | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
   const [running, setRunning] = useState(false);
-  const [finalPlan, setFinalPlan] = useState<Plan | null>(null);
-  const [confirmingPlan, setConfirmingPlan] = useState<Plan | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  const appendLog = (msg: string) => {
-    setLogs((prev) => [...prev, msg]);
+  const appendLog = (message: string) => {
+    setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${message}`]);
   };
 
   const consumeSSE = async (res: Response) => {
@@ -89,38 +59,25 @@ export default function HomePage() {
 
       for (const line of lines) {
         if (!line.startsWith("data: ")) continue;
-        try {
-          const event: SSEEvent = JSON.parse(line.slice(6));
-          handleEvent(event);
-        } catch {
-          // ignore parse errors
-        }
+        const event = JSON.parse(line.slice(6)) as SSEEvent;
+        handleEvent(event);
       }
     }
   };
 
-  // 会话状态恢复
   useEffect(() => {
     async function restoreSession() {
       try {
         setRestoring(true);
         const res = await fetch("/api/session/restore");
         const data = await res.json();
-
         if (data.session && data.plan) {
+          setPlan(data.plan);
           setInput(data.plan.intent.rawInput);
-          setTasks(data.tasks);
-          setFinalPlan(data.plan);
-
-          // 如果方案是 ready 状态，显示确认面板
-          if (data.plan.status === "ready") {
-            setConfirmingPlan(data.plan);
-          }
-
-          appendLog(`已恢复 ${new Date(data.session.updatedAt).toLocaleString()} 的未完成行程`);
+          appendLog("已恢复最近未完成方案");
         }
-      } catch (err) {
-        console.error("恢复会话失败:", err);
+      } catch {
+        appendLog("未恢复到可用会话");
       } finally {
         setRestoring(false);
       }
@@ -129,14 +86,64 @@ export default function HomePage() {
     restoreSession();
   }, []);
 
-  const handleRun = async () => {
+  const handleEvent = (event: SSEEvent) => {
+    if (event.type === "parsing_start") appendLog("正在理解长文本场景");
+    if (event.type === "parsing_done") appendLog("已提取出行目标、参与人和偏好");
+    if (event.type === "planning_start") appendLog("正在生成可执行行程");
+    if (event.type === "planning_done") {
+      const nextPlan = (event.payload as { plan: Plan }).plan;
+      setPlan(nextPlan);
+      appendLog("已生成行程卡");
+    }
+    if (event.type === "validation_done") appendLog("可执行性校验完成");
+    if (event.type === "plan_ready") {
+      const nextPlan = (event.payload as { plan: Plan }).plan;
+      setPlan(nextPlan);
+      appendLog("方案已保存，等待确认");
+      setRunning(false);
+    }
+    if (event.type === "execution_start") appendLog("开始 mock 履约执行");
+    if (event.type === "task_update" || event.type === "task_replaced") {
+      const payload = event.payload as TaskUpdatePayload;
+      setPlan((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          tasks: prev.tasks.map((task) =>
+            task.id === payload.taskId
+              ? {
+                  ...task,
+                  status: payload.status,
+                  merchant: payload.merchant ?? task.merchant,
+                  title: payload.merchant?.name ?? task.title,
+                  failureReason: payload.failureReason ?? task.failureReason,
+                  retryCount: payload.retryCount ?? task.retryCount,
+                }
+              : task
+          ),
+        };
+      });
+    }
+    if (event.type === "execution_complete") {
+      const nextPlan = (event.payload as { plan: Plan }).plan;
+      setPlan(nextPlan);
+      appendLog("mock 履约完成");
+      setRunning(false);
+    }
+    if (event.type === "error") {
+      const payload = event.payload as { message: string };
+      setError(payload.message);
+      appendLog(payload.message);
+      setRunning(false);
+    }
+  };
+
+  const handlePlan = async () => {
     if (!input.trim() || running) return;
     setRunning(true);
+    setError(null);
+    setPlan(null);
     setLogs([]);
-    setTasks([]);
-    setFinalPlan(null);
-    setConfirmingPlan(null);
-
     abortRef.current = new AbortController();
 
     try {
@@ -147,357 +154,302 @@ export default function HomePage() {
         signal: abortRef.current.signal,
       });
 
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error ?? "规划失败");
+      }
+
       await consumeSSE(res);
-    } catch (err: unknown) {
+    } catch (err) {
       if (err instanceof Error && err.name !== "AbortError") {
-        appendLog(`❌ 连接错误: ${err.message}`);
+        setError(err.message);
+        appendLog(err.message);
       }
     } finally {
       setRunning(false);
     }
   };
 
-  const handleEvent = (event: SSEEvent) => {
-    const label = PHASE_LABELS[event.type];
-    if (label) appendLog(`[${new Date(event.timestamp).toLocaleTimeString()}] ${label}`);
+  const handleConfirm = async () => {
+    if (!plan || running) return;
+    setRunning(true);
+    setError(null);
 
-    if (event.type === "planning_done" || event.type === "plan_ready" || event.type === "replanning_done") {
-      const plan = (event.payload as { plan: Plan }).plan;
-      if (plan?.tasks) setTasks(plan.tasks);
-    }
-
-    // 方案就绪，等待用户确认
-    if (event.type === "plan_ready") {
-      const plan = (event.payload as { plan: Plan }).plan;
-      setConfirmingPlan(plan);
-      setRunning(false);
-    }
-
-    if (event.type === "task_update" || event.type === "task_replaced") {
-      const p = event.payload as TaskUpdatePayload;
-      setTasks((prev) =>
-        prev.map((t) =>
-          t.id === p.taskId
-            ? {
-                ...t,
-                status: p.status,
-                merchant: p.merchant ?? t.merchant,
-                failureReason: p.failureReason ?? t.failureReason,
-                retryCount: p.retryCount ?? t.retryCount,
-              }
-            : t
-        )
-      );
-    }
-
-    if (event.type === "execution_complete") {
-      const plan = (event.payload as { plan: Plan }).plan;
-      setFinalPlan(plan);
-      setRunning(false);
-    }
-
-    if (event.type === "error") {
-      const { message } = event.payload as { message: string };
-      appendLog(`❌ ${message}`);
-      setRunning(false);
-    }
-  };
-
-  const handleStop = () => {
-    abortRef.current?.abort();
-    setRunning(false);
-    appendLog("⏹️ 已手动终止执行");
-  };
-
-  // 确认方案并继续执行
-  const handleConfirmPlan = async (confirmed: boolean) => {
-    if (!confirmingPlan) return;
-
-    if (!confirmed) {
-      // 用户选择微调，关闭确认面板
-      setConfirmingPlan(null);
-      appendLog("用户选择微调方案");
-      return;
-    }
-
-    // 用户确认执行
     try {
-      const res = await fetch("/api/confirm-plan", {
+      const confirmRes = await fetch("/api/confirm-plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          planId: confirmingPlan.id,
-          sessionId: confirmingPlan.sessionId,
-          confirmed: true,
-        }),
+        body: JSON.stringify({ planId: plan.id, sessionId: plan.sessionId, confirmed: true }),
       });
 
-      if (res.ok) {
-        setConfirmingPlan(null);
-        setRunning(true);
-        appendLog("用户确认方案，开始执行...");
-
-        const execRes = await fetch("/api/execute-plan", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ planId: confirmingPlan.id }),
-        });
-
-        if (!execRes.ok) {
-          const error = await execRes.json();
-          appendLog(`执行失败: ${error.error}`);
-          setRunning(false);
-          return;
-        }
-
-        await consumeSSE(execRes);
-      } else {
-        const error = await res.json();
-        appendLog(`确认失败: ${error.error}`);
+      if (!confirmRes.ok) {
+        const data = await confirmRes.json();
+        throw new Error(data.error ?? "确认失败");
       }
+
+      const execRes = await fetch("/api/execute-plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ planId: plan.id }),
+      });
+
+      if (!execRes.ok) {
+        const data = await execRes.json();
+        throw new Error(data.error ?? "执行失败");
+      }
+
+      await consumeSSE(execRes);
     } catch (err) {
-      appendLog(`确认异常: ${err}`);
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      appendLog(message);
     } finally {
       setRunning(false);
     }
   };
 
-  // 替换任务商家
-  const handleReplaceTask = async (taskId: string) => {
-    if (!finalPlan && !confirmingPlan) return;
-    const plan = confirmingPlan || finalPlan;
-    if (!plan) return;
+  const handleReplace = async (taskId: string) => {
+    if (!plan || running) return;
+    setRunning(true);
+    setError(null);
 
     try {
       const res = await fetch("/api/replace-task", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          taskId,
-          planId: plan.id,
-        }),
+        body: JSON.stringify({ planId: plan.id, taskId }),
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        // 更新本地任务状态
-        setTasks((prev) =>
-          prev.map((t) => (t.id === taskId ? { ...t, ...data.task } : t))
-        );
-        appendLog(`任务已替换为: ${data.task.merchant?.name}`);
-      } else {
-        const error = await res.json();
-        appendLog(`替换失败: ${error.error}`);
-      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "替换失败");
+
+      setPlan((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          tasks: prev.tasks.map((task) => (task.id === taskId ? data.task : task)),
+          validation: data.validation ?? prev.validation,
+        };
+      });
+      appendLog(data.message ?? "已替换并重新校验");
     } catch (err) {
-      appendLog(`替换异常: ${err}`);
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      appendLog(message);
+    } finally {
+      setRunning(false);
     }
   };
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6">
-      <div className="max-w-4xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="text-center pt-4">
-          <h1 className="text-3xl font-bold text-slate-800">🗺️ AI同城行程规划</h1>
-          <p className="text-slate-500 mt-1 text-sm">MiniClaw · 单Agent · 全自动履约</p>
-          {restoring && (
-            <p className="text-blue-500 mt-2 text-sm animate-pulse">⏳ 正在恢复上次会话...</p>
-          )}
-        </div>
+    <main className="min-h-screen bg-[#f6f7f9] text-slate-900">
+      <div className="mx-auto flex max-w-6xl flex-col gap-6 px-5 py-8">
+        <header className="flex flex-col gap-1">
+          <p className="text-sm font-medium text-blue-700">MiniClaw Agent Demo</p>
+          <h1 className="text-3xl font-bold tracking-normal">美团同城行程规划</h1>
+          <p className="text-sm text-slate-500">长文本场景理解、行程卡生成、可执行性校验、mock 履约闭环</p>
+        </header>
 
-        {/* Plan Confirmation Panel */}
-        {confirmingPlan && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-2xl p-6 max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto">
-              <h3 className="text-xl font-bold mb-4">方案已生成，请确认</h3>
-
-              {/* 行程摘要 */}
-              <div className="space-y-3 mb-6">
-                {confirmingPlan.tasks.map((t: Task, i: number) => (
-                  <div key={t.id} className="flex items-center gap-3 text-sm border-b border-slate-100 pb-2">
-                    <span className="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-medium text-xs">
-                      {i + 1}
-                    </span>
-                    <span className="flex-1 font-medium">{t.merchant?.name || `待定${t.businessType}`}</span>
-                    <span className="text-slate-400 text-xs">
-                      {new Date(t.startTime).toLocaleTimeString("zh", { hour: "2-digit", minute: "2-digit" })}
-                      -
-                      {new Date(t.endTime).toLocaleTimeString("zh", { hour: "2-digit", minute: "2-digit" })}
-                    </span>
-                    {confirmingPlan && (
-                      <button
-                        onClick={() => handleReplaceTask(t.id)}
-                        className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-1 rounded"
-                      >
-                        换一家
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              {/* 操作按钮 */}
-              <div className="flex gap-3">
+        <section className="grid gap-5 lg:grid-cols-[420px_1fr]">
+          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <label className="text-sm font-semibold text-slate-700">用户长文本</label>
+            <textarea
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              disabled={running || restoring}
+              rows={9}
+              className="mt-3 w-full resize-none rounded-md border border-slate-200 p-3 text-sm leading-6 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:opacity-60"
+            />
+            <div className="mt-3 flex flex-wrap gap-2">
+              {EXAMPLE_INPUTS.map((example, index) => (
                 <button
-                  onClick={() => handleConfirmPlan(true)}
-                  className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-medium hover:bg-blue-700 transition-colors"
+                  key={example}
+                  type="button"
+                  onClick={() => setInput(example)}
+                  disabled={running}
+                  className="rounded-md border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:border-blue-300 hover:text-blue-700 disabled:opacity-50"
                 >
-                  ✅ 确认执行
+                  示例 {index + 1}
                 </button>
-                <button
-                  onClick={() => handleConfirmPlan(false)}
-                  className="px-4 py-3 text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
-                >
-                  微调
-                </button>
-              </div>
+              ))}
             </div>
-          </div>
-        )}
-
-        {/* Input Area */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 space-y-3">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="描述你的出行需求，例如：今天下午2点到6点，在西湖附近，2个人吃饭逛街..."
-            rows={3}
-            disabled={running || restoring}
-            className="w-full resize-none rounded-xl border border-slate-200 p-3 text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-300 text-sm disabled:opacity-60"
-          />
-
-          {/* Example chips */}
-          <div className="flex flex-wrap gap-2">
-            {EXAMPLE_INPUTS.map((ex, i) => (
-              <button
-                key={i}
-                onClick={() => setInput(ex)}
-                disabled={running || restoring}
-                className="text-xs bg-slate-100 hover:bg-blue-100 text-slate-600 hover:text-blue-700 px-3 py-1.5 rounded-full transition-colors disabled:opacity-50"
-              >
-                示例{i + 1}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex gap-3">
             <button
-              onClick={handleRun}
+              type="button"
+              onClick={handlePlan}
               disabled={running || restoring || !input.trim()}
-              className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-medium py-2.5 rounded-xl transition-colors text-sm"
+              className="mt-4 w-full rounded-md bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:bg-slate-300"
             >
-              {restoring ? "恢复中..." : running ? "规划执行中..." : "🚀 开始规划"}
+              {running ? "处理中..." : restoring ? "恢复中..." : "生成可执行行程"}
             </button>
-            {running && (
-              <button
-                onClick={handleStop}
-                className="px-4 bg-red-50 hover:bg-red-100 text-red-600 font-medium py-2.5 rounded-xl transition-colors text-sm border border-red-200"
-              >
-                终止
-              </button>
+            {error && (
+              <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                {error}
+              </div>
             )}
           </div>
-        </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          {/* Task Timeline */}
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
-            <h2 className="font-semibold text-slate-700 mb-4 text-sm uppercase tracking-wide">
-              📋 行程任务
-            </h2>
-            {tasks.length === 0 ? (
-              <p className="text-slate-400 text-sm text-center py-8">行程任务将在规划后显示</p>
+          <div className="flex flex-col gap-5">
+            {!plan ? (
+              <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white text-sm text-slate-400">
+                生成后这里会展示行程卡、推荐理由和可执行性校验
+              </div>
             ) : (
-              <div className="space-y-3">
-                {tasks.map((task, i) => (
-                  <div key={task.id} className="relative">
-                    {i < tasks.length - 1 && (
-                      <div className="absolute left-5 top-10 w-0.5 h-4 bg-slate-200" />
-                    )}
-                    <div className="flex items-start gap-3">
-                      <div className="w-10 h-10 rounded-full bg-slate-50 border border-slate-200 flex items-center justify-center text-lg flex-shrink-0">
-                        {TYPE_ICONS[task.businessType] ?? "📌"}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-medium text-slate-800 text-sm truncate">
-                            {task.merchant?.name ?? `待定${task.businessType}`}
-                          </span>
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[task.status]}`}>
-                            {STATUS_LABELS[task.status]}
-                          </span>
-                          {task.type === "core" && (
-                            <span className="text-xs bg-amber-50 text-amber-600 px-2 py-0.5 rounded-full border border-amber-200">核心</span>
-                          )}
-                        </div>
-                        <div className="text-xs text-slate-400 mt-0.5">
-                          {new Date(task.startTime).toLocaleTimeString("zh", { hour: "2-digit", minute: "2-digit" })}
-                          {" → "}
-                          {new Date(task.endTime).toLocaleTimeString("zh", { hour: "2-digit", minute: "2-digit" })}
-                          {task.merchant?.address && (
-                            <span className="ml-2 text-slate-300">· {task.merchant.address.slice(0, 12)}</span>
-                          )}
-                        </div>
-                        {task.failureReason && (
-                          <p className="text-xs text-red-400 mt-0.5">{task.failureReason}</p>
-                        )}
-                      </div>
+              <>
+                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-blue-700">{plan.brief?.city}{plan.brief?.area}</p>
+                      <h2 className="mt-1 text-2xl font-bold">{plan.reasoning?.summary ?? "推荐行程"}</h2>
+                      <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">{plan.brief?.userGoal}</p>
                     </div>
+                    <button
+                      type="button"
+                      onClick={handleConfirm}
+                      disabled={running}
+                      className="rounded-md bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-700 disabled:bg-slate-300"
+                    >
+                      确认并 mock 履约
+                    </button>
                   </div>
-                ))}
-              </div>
+
+                  <div className="mt-5 grid gap-3 md:grid-cols-2">
+                    <InfoBlock title="时间窗口" value={`${formatTime(plan.intent.startTime)}-${formatTime(plan.intent.endTime)}`} />
+                    <InfoBlock title="参与人" value={`${plan.brief?.participants.adults ?? 0} 位成人，${plan.brief?.participants.children ?? 0} 位儿童`} />
+                    <InfoBlock title="偏好" value={plan.brief?.preferences.join("、") || "通用轻松出行"} />
+                    <InfoBlock title="假设" value={plan.brief?.assumptions.join("；") || "无额外假设"} />
+                  </div>
+                </section>
+
+                <section className="grid gap-4">
+                  {plan.tasks.map((task, index) => (
+                    <ItineraryCard
+                      key={task.id}
+                      index={index}
+                      task={task}
+                      running={running}
+                      onReplace={() => handleReplace(task.id)}
+                    />
+                  ))}
+                </section>
+
+                <section className="grid gap-5 lg:grid-cols-2">
+                  <Panel title="可执行性校验">
+                    <div className="grid gap-2">
+                      {(plan.validation ?? []).map((item) => (
+                        <div key={item.label} className={`rounded-md border px-3 py-2 text-sm ${validationClass(item.status)}`}>
+                          <div className="font-semibold">{item.label}</div>
+                          <div className="mt-1 opacity-90">{item.detail}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </Panel>
+
+                  <Panel title="Agent 推理摘要">
+                    <div className="space-y-3 text-sm leading-6 text-slate-600">
+                      {(plan.reasoning?.whyThisWorks ?? []).map((item) => (
+                        <p key={item}>{item}</p>
+                      ))}
+                      {(plan.reasoning?.hiddenInsights ?? []).map((item) => (
+                        <p key={item} className="rounded-md bg-slate-50 p-3 text-slate-700">{item}</p>
+                      ))}
+                    </div>
+                  </Panel>
+                </section>
+              </>
             )}
           </div>
+        </section>
 
-          {/* Execution Log */}
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 flex flex-col">
-            <h2 className="font-semibold text-slate-700 mb-4 text-sm uppercase tracking-wide">
-              📡 执行日志
-            </h2>
-            <div className="flex-1 overflow-y-auto max-h-80 space-y-1.5">
-              {logs.length === 0 ? (
-                <p className="text-slate-400 text-sm text-center py-8">等待执行...</p>
-              ) : (
-                logs.map((log, i) => (
-                  <p key={i} className="text-xs text-slate-600 font-mono leading-relaxed">
-                    {log}
-                  </p>
-                ))
-              )}
-            </div>
+        <section className="rounded-lg border border-slate-200 bg-white p-4">
+          <div className="mb-3 text-sm font-semibold text-slate-700">运行日志</div>
+          <div className="max-h-44 space-y-1 overflow-y-auto font-mono text-xs leading-5 text-slate-500">
+            {logs.length ? logs.map((log) => <div key={log}>{log}</div>) : <div>等待执行...</div>}
           </div>
-        </div>
-
-        {/* Final Summary */}
-        {finalPlan && (
-          <div className="bg-green-50 border border-green-200 rounded-2xl p-5">
-            <h2 className="font-semibold text-green-800 mb-3">🎉 行程履约完成</h2>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <div className="bg-white rounded-xl p-3 text-center">
-                <p className="text-2xl font-bold text-slate-800">{finalPlan.tasks.length}</p>
-                <p className="text-xs text-slate-500 mt-1">总任务数</p>
-              </div>
-              <div className="bg-white rounded-xl p-3 text-center">
-                <p className="text-2xl font-bold text-green-600">
-                  {finalPlan.tasks.filter((t) => t.status === "success" || t.status === "replaced").length}
-                </p>
-                <p className="text-xs text-slate-500 mt-1">成功执行</p>
-              </div>
-              <div className="bg-white rounded-xl p-3 text-center">
-                <p className="text-2xl font-bold text-purple-600">
-                  {finalPlan.tasks.filter((t) => t.status === "replaced").length}
-                </p>
-                <p className="text-xs text-slate-500 mt-1">自动替换</p>
-              </div>
-              <div className="bg-white rounded-xl p-3 text-center">
-                <p className="text-2xl font-bold text-orange-600">{finalPlan.constraintLevel}</p>
-                <p className="text-xs text-slate-500 mt-1">约束降级层</p>
-              </div>
-            </div>
-          </div>
-        )}
+        </section>
       </div>
     </main>
+  );
+}
+
+function InfoBlock({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="rounded-md bg-slate-50 p-3">
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">{title}</div>
+      <div className="mt-1 text-sm font-medium text-slate-700">{value}</div>
+    </div>
+  );
+}
+
+function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <h3 className="mb-4 text-sm font-bold text-slate-800">{title}</h3>
+      {children}
+    </div>
+  );
+}
+
+function ItineraryCard({
+  index,
+  task,
+  running,
+  onReplace,
+}: {
+  index: number;
+  task: Task;
+  running: boolean;
+  onReplace: () => void;
+}) {
+  return (
+    <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+        <div className="flex gap-4">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-blue-50 text-sm font-bold text-blue-700">
+            {index + 1}
+          </div>
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-lg font-bold">{task.title ?? task.merchant?.name ?? task.businessType}</h3>
+              <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">
+                {STATUS_LABEL[task.status] ?? task.status}
+              </span>
+            </div>
+            <p className="mt-1 text-sm text-slate-500">
+              {formatTime(task.startTime)}-{formatTime(task.endTime)}
+              {task.travelToNextMin > 0 ? ` · 到下一站预留 ${task.travelToNextMin} 分钟` : ""}
+            </p>
+            <p className="mt-2 text-sm leading-6 text-slate-600">{task.whyRecommended}</p>
+            {task.merchant?.address && <p className="mt-1 text-sm text-slate-400">{task.merchant.address}</p>}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onReplace}
+          disabled={running}
+          className="rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:border-blue-300 hover:text-blue-700 disabled:opacity-50"
+        >
+          换一家
+        </button>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {(task.suitabilityTags ?? []).map((tag) => (
+          <span key={tag} className="rounded-md bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">
+            {tag}
+          </span>
+        ))}
+      </div>
+
+      {task.validation && task.validation.length > 0 && (
+        <div className="mt-4 grid gap-2 md:grid-cols-3">
+          {task.validation.map((item) => (
+            <div key={item.label} className={`rounded-md border px-3 py-2 text-xs ${validationClass(item.status)}`}>
+              <div className="font-semibold">{item.label}</div>
+              <div className="mt-1">{item.detail}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </article>
   );
 }
