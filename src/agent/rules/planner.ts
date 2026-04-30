@@ -40,12 +40,6 @@ function matchesDietary(merchant: Merchant, dietary: string[]): boolean {
   return dietary.every((d) => merchant.dietarySupport.includes(d));
 }
 
-// 时间字符串解析为分钟数（相对于00:00）
-function timeToMin(iso: string): number {
-  const d = new Date(iso);
-  return d.getHours() * 60 + d.getMinutes();
-}
-
 function addMinutes(iso: string, min: number): string {
   return new Date(new Date(iso).getTime() + min * 60_000).toISOString();
 }
@@ -187,8 +181,9 @@ export function buildPlan(input: PlanningInput): Plan {
 // 梯度约束降级重排
 export function replanWithDegradedConstraints(
   plan: Plan,
-  failedTaskId: string
+  _failedTaskId: string
 ): Plan {
+  void _failedTaskId;
   const nextLevel = Math.min(plan.constraintLevel + 1, 3);
   return buildPlan({
     intent: plan.intent,

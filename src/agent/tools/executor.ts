@@ -1,7 +1,7 @@
 // 并行执行引擎 — 全任务并行 + 分级故障自愈
 import type { Plan, Task, ExecutionResult, TaskStatus } from "@/types";
 import { executeMerchantBooking } from "@/mock/fulfillment";
-import { getMerchantsByType, getMerchantById } from "@/mock/merchants";
+import { getMerchantsByType } from "@/mock/merchants";
 import { validateMerchant } from "@/mock/fulfillment";
 
 const WEAK_RETRY_INTERVAL_MS = 5000;

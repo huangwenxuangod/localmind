@@ -22,7 +22,8 @@ export type PlanStatus =
   | "ready"
   | "executing"
   | "completed"
-  | "failed";
+  | "failed"
+  | "cancelled";
 
 export type TransportMode = "walk" | "bike" | "drive" | "transit" | "auto";
 

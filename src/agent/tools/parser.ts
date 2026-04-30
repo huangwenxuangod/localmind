@@ -194,20 +194,27 @@ export function buildSystemPromptWithMemory(
   return `${basePrompt}\n\n【用户历史偏好】\n${memory.summary}\n请结合以上偏好理解用户意图。`;
 }
 
-// LLM 增强解析（使用 Claude API）
+import OpenAI from "openai";
+
+// LLM 增强解析（使用字节豆包 / OpenAI 兼容 SDK）
 export async function parseIntentWithLLM(
   rawInput: string,
   memoryContext?: string
 ): Promise<ParsedIntent> {
-  const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-  if (!ANTHROPIC_API_KEY) {
-    console.warn("[Parser] No ANTHROPIC_API_KEY, falling back to local rules");
+  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+  const ARK_BASE_URL = process.env.ARK_BASE_URL;
+  const ARK_MODEL_ID = process.env.ARK_MODEL_ID;
+
+  if (!OPENAI_API_KEY || !ARK_BASE_URL || !ARK_MODEL_ID) {
+    console.warn("[Parser] Missing Doubao/OpenAI env vars, falling back to local rules");
     return parseIntentLocally(rawInput);
   }
 
   try {
-    const { Anthropic } = await import("@anthropic-ai/sdk");
-    const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+    const client = new OpenAI({
+      apiKey: OPENAI_API_KEY,
+      baseURL: ARK_BASE_URL,
+    });
 
     const today = new Date().toISOString().split("T")[0];
     const memorySection = memoryContext
@@ -228,14 +235,17 @@ export async function parseIntentWithLLM(
 
 只输出JSON，不输出任何解释。`;
 
-    const response = await client.messages.create({
-      model: "claude-haiku-4-5-20251001",
+    const response = await client.chat.completions.create({
+      model: ARK_MODEL_ID,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: rawInput },
+      ],
       max_tokens: 1024,
-      system: systemPrompt,
-      messages: [{ role: "user", content: rawInput }],
+      temperature: 0,
     });
 
-    const text = response.content[0].type === "text" ? response.content[0].text : "";
+    const text = response.choices[0]?.message?.content ?? "";
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error("LLM returned no valid JSON");
 

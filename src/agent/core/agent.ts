@@ -74,7 +74,7 @@ export async function runAgent(
     const loadFull = shouldLoadFullMemory(userInput);
     const memoryContext = loadFull && memory ? memory.memoryMd : (memory?.summary ?? "");
 
-    let intent = await parseIntentWithLLM(userInput, memoryContext || undefined);
+    const intent = await parseIntentWithLLM(userInput, memoryContext || undefined);
 
     state = { ...state, intent };
     emit(emitter, "parsing_done", { intent });
@@ -89,6 +89,7 @@ export async function runAgent(
 
     await upsertPlan(plan);
     await upsertTasks(plan.tasks);
+    await upsertSession(sessionId, { currentPlanId: plan.id });
     insertLog({
       sessionId, planId: plan.id, level: "info", phase: "planning",
       message: "方案已生成", payload: { taskCount: plan.tasks.length },
@@ -146,12 +147,50 @@ export async function runAgent(
     state = { ...state, plan, phase: "awaiting_confirm" };
     emit(emitter, "plan_ready", { plan });
     await upsertPlan(plan);
+    await upsertSession(sessionId, { currentPlanId: plan.id });
 
-    // ── Phase 4: Execute ────────────────────────────────────────
-    state = transition(state, "executing");
+    return state;
+
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    state = { ...state, phase: "error", error: message };
+    emit(emitter, "error", { message });
+
+    insertLog({
+      sessionId, planId: state.plan?.id, level: "error", phase: state.phase,
+      message, payload: { error: message },
+    });
+  }
+
+  return state;
+}
+
+// ================================================================
+// 已确认方案执行入口
+// ================================================================
+export async function executeConfirmedPlan(
+  initialPlan: Plan,
+  emitter: SSEEmitter
+): Promise<AgentState> {
+  let plan = initialPlan;
+  const sessionId = plan.sessionId;
+  const intent = plan.intent;
+  let state: AgentState = {
+    ...makeInitialState(plan.sessionId),
+    phase: "executing",
+    plan,
+    intent: plan.intent,
+    constraintLevel: plan.constraintLevel,
+  };
+
+  try {
     emit(emitter, "execution_start", { taskCount: plan.tasks.length });
 
-    const taskEventCallback = (taskId: string, status: TaskStatus, detail?: Partial<Task>) => {
+    const createTaskEventCallback = () => (
+      taskId: string,
+      status: TaskStatus,
+      detail?: Partial<Task>
+    ) => {
       const payload: TaskUpdatePayload = {
         taskId,
         status,
@@ -164,14 +203,15 @@ export async function runAgent(
         emit(emitter, "task_replaced", payload);
       }
 
-      // 单任务状态变更 fire-and-forget
       const currentTask = plan.tasks.find((t) => t.id === taskId);
       if (currentTask) {
         upsertTasks([{ ...currentTask, ...detail, status }]).catch(console.error);
       }
     };
 
-    let execReport = await executePlanParallel(plan, taskEventCallback);
+    await upsertPlan({ ...plan, status: "executing" });
+
+    let execReport = await executePlanParallel(plan, createTaskEventCallback());
     plan = execReport.updatedPlan;
     state = { ...state, plan };
 
@@ -200,7 +240,7 @@ export async function runAgent(
         payload: { constraintLevel: plan.constraintLevel, iteration: state.iteration },
       });
 
-      execReport = await executePlanParallel(plan, taskEventCallback);
+      execReport = await executePlanParallel(plan, createTaskEventCallback());
       plan = execReport.updatedPlan;
       state = { ...state, plan };
     }

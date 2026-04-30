@@ -1,5 +1,82 @@
 import { db } from "./supabase";
-import type { Plan, Task, ExecutionResult, Session } from "@/types";
+import type { Plan, Task, ExecutionResult, Session, PlanStatus, TaskStatus, TaskType, BusinessType } from "@/types";
+
+type PlanRow = {
+  id: string;
+  session_id: string;
+  intent: Plan["intent"];
+  status: PlanStatus;
+  constraint_level: number;
+  created_at: string;
+  updated_at: string;
+};
+
+type TaskRow = {
+  id: string;
+  plan_id: string;
+  type: TaskType;
+  business_type: BusinessType;
+  merchant: Task["merchant"];
+  candidate_merchants: Task["candidateMerchants"];
+  start_time: string;
+  end_time: string;
+  duration_min: number;
+  travel_to_next_min: number;
+  status: TaskStatus;
+  retry_count: number;
+  failure_reason: string | null;
+  replaced_from: string | null;
+};
+
+type SessionRow = {
+  id: string;
+  current_plan_id: string | null;
+  status: Session["status"];
+  created_at: string;
+  updated_at: string;
+};
+
+function mapPlan(row: PlanRow): Plan {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    intent: row.intent,
+    tasks: [],
+    status: row.status,
+    constraintLevel: row.constraint_level,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapTask(row: TaskRow): Task {
+  return {
+    id: row.id,
+    planId: row.plan_id,
+    type: row.type,
+    businessType: row.business_type,
+    merchant: row.merchant,
+    candidateMerchants: row.candidate_merchants,
+    startTime: row.start_time,
+    endTime: row.end_time,
+    durationMin: row.duration_min,
+    travelToNextMin: row.travel_to_next_min,
+    status: row.status,
+    retryCount: row.retry_count,
+    failureReason: row.failure_reason,
+    replacedFrom: row.replaced_from,
+  };
+}
+
+function mapSession(row: SessionRow): Session {
+  return {
+    id: row.id,
+    currentPlanId: row.current_plan_id,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
 
 // ── Sessions ──────────────────────────────────────────────────────────────────
 
@@ -120,7 +197,7 @@ export async function getTaskById(taskId: string): Promise<Task | null> {
     console.error("[DB] getTaskById failed:", error.message);
     return null;
   }
-  return data as Task;
+  return mapTask(data as TaskRow);
 }
 
 export async function getPlanById(planId: string): Promise<Plan | null> {
@@ -133,7 +210,7 @@ export async function getPlanById(planId: string): Promise<Plan | null> {
     console.error("[DB] getPlanById failed:", error.message);
     return null;
   }
-  return data as Plan;
+  return mapPlan(data as PlanRow);
 }
 
 export async function getTasksByPlanId(planId: string): Promise<Task[]> {
@@ -146,7 +223,7 @@ export async function getTasksByPlanId(planId: string): Promise<Task[]> {
     console.error("[DB] getTasksByPlanId failed:", error.message);
     return [];
   }
-  return data as Task[];
+  return (data as TaskRow[]).map(mapTask);
 }
 
 export async function getLatestActiveSession(): Promise<Session | null> {
@@ -161,7 +238,7 @@ export async function getLatestActiveSession(): Promise<Session | null> {
     console.error("[DB] getLatestActiveSession failed:", error.message);
     return null;
   }
-  return data as Session;
+  return mapSession(data as SessionRow);
 }
 
 // ── Logs ──────────────────────────────────────────────────────────────────────

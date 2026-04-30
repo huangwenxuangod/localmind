@@ -1,5 +1,5 @@
 // Mock履约API — 模拟商家预约/预校验接口
-import type { Merchant, ValidationResult, ExecutionResult } from "@/types";
+import type { ValidationResult, ExecutionResult } from "@/types";
 import { getMerchantById } from "./merchants";
 
 // 模拟网络延迟
@@ -47,9 +47,11 @@ export async function validateMerchant(
 // 执行预约
 export async function executeMerchantBooking(
   merchantId: string,
-  startTime: string,
-  headcount: number
+  _startTime: string,
+  _headcount: number
 ): Promise<ExecutionResult> {
+  void _startTime;
+  void _headcount;
   await delay(200 + Math.random() * 500);
 
   const merchant = getMerchantById(merchantId);
