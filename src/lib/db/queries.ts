@@ -181,41 +181,6 @@ export async function insertExecution(result: ExecutionResult, planId: string) {
   if (error) throw new Error(`[DB] insertExecution failed: ${error.message}`);
 }
 
-// ── User Memory (Agent Memory) ────────────────────────────────────────────────
-
-export interface UserMemory {
-  id: string;
-  memoryMd: string;
-  summary: string;
-}
-
-export async function getUserMemory(userId: string): Promise<UserMemory | null> {
-  const { data, error } = await db
-    .from("user_profiles")
-    .select("*")
-    .eq("id", userId)
-    .single();
-  if (error) {
-    if (error.code !== "PGRST116") console.error("[DB] getUserMemory failed:", error.message);
-    return null;
-  }
-  return {
-    id: data.id,
-    memoryMd: data.memory_md ?? "",
-    summary: data.summary ?? "",
-  };
-}
-
-export async function upsertUserMemory(memory: UserMemory) {
-  const { error } = await db.from("user_profiles").upsert({
-    id: memory.id,
-    memory_md: memory.memoryMd,
-    summary: memory.summary,
-    updated_at: new Date().toISOString(),
-  });
-  if (error) throw new Error(`[DB] upsertUserMemory failed: ${error.message}`);
-}
-
 // ── Queries ────────────────────────────────────────────────────────────────────
 
 export async function getTaskById(taskId: string): Promise<Task | null> {

@@ -1,29 +1,13 @@
 // 用户确认方案 API
 // POST /api/confirm-plan
-// Body: { planId: string, sessionId: string, confirmed: boolean, adjustments?: [...] }
+// Body: { planId: string, sessionId: string, confirmed: boolean }
 
-import { getPlanById, upsertPlan, getTasksByPlanId, upsertTasks } from "@/lib/db/queries";
-import type { Merchant, Task } from "@/types";
-
-type PlanAdjustment =
-  | {
-      type: "replace_merchant";
-      taskId: string;
-      newMerchant: Merchant;
-    }
-  | {
-      type: "adjust_time";
-      taskId: string;
-      newTime: {
-        startTime: string;
-        endTime: string;
-      };
-    };
+import { getPlanById, upsertPlan } from "@/lib/db/queries";
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { planId, sessionId, confirmed, adjustments } = body;
+    const { planId, sessionId, confirmed } = body;
 
     if (!planId || !sessionId || typeof confirmed !== "boolean") {
       return Response.json(
@@ -39,8 +23,6 @@ export async function POST(req: Request) {
     }
 
     if (!confirmed) {
-      // 用户取消或选择微调
-      // 更新 plan 状态为 cancelled 或 awaiting_adjustment
       await upsertPlan({ ...plan, status: "cancelled" });
       return Response.json({
         success: true,
@@ -49,24 +31,13 @@ export async function POST(req: Request) {
       });
     }
 
-    // 用户确认执行
-    // 如果有微调请求，先应用调整
-    let finalPlan = plan;
-    if (adjustments && adjustments.length > 0) {
-      const tasks = await getTasksByPlanId(planId);
-      const updatedTasks = applyAdjustments(tasks, adjustments);
-      await upsertTasks(updatedTasks);
-      finalPlan = { ...plan, tasks: updatedTasks };
-    }
-
-    // 更新 plan 状态为 ready，等待执行
-    await upsertPlan({ ...finalPlan, status: "ready" });
+    await upsertPlan({ ...plan, status: "ready" });
 
     return Response.json({
       success: true,
       status: "confirmed",
       message: "Plan confirmed, ready for execution",
-      plan: finalPlan,
+      plan,
     });
   } catch (err) {
     console.error("[ConfirmPlan] Error:", err);
@@ -75,32 +46,4 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
-}
-
-// 应用用户微调
-function applyAdjustments(tasks: Task[], adjustments: PlanAdjustment[]): Task[] {
-  const updated = [...tasks];
-
-  for (const adj of adjustments) {
-    const idx = updated.findIndex((t) => t.id === adj.taskId);
-    if (idx === -1) continue;
-
-    if (adj.type === "replace_merchant" && adj.newMerchant) {
-      updated[idx] = {
-        ...updated[idx],
-        merchant: adj.newMerchant,
-        replacedFrom: updated[idx].merchant?.id || null,
-      };
-    }
-
-    if (adj.type === "adjust_time" && adj.newTime) {
-      updated[idx] = {
-        ...updated[idx],
-        startTime: adj.newTime.startTime,
-        endTime: adj.newTime.endTime,
-      };
-    }
-  }
-
-  return updated;
 }

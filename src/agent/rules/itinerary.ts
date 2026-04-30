@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import OpenAI from "openai";
 import type {
   BusinessType,
   Merchant,
@@ -44,6 +45,37 @@ const TYPE_LABEL: Record<BusinessType, string> = {
   leisure: "亲子休闲",
   sport: "轻运动",
   culture: "文化展馆",
+};
+
+type LlmItineraryStepDraft = {
+  businessType?: unknown;
+  durationMin?: unknown;
+  goal?: unknown;
+  whyRecommended?: unknown;
+  suitabilityTags?: unknown;
+};
+
+type LlmPlanDraft = {
+  userGoal?: unknown;
+  preferences?: unknown;
+  constraints?: unknown;
+  assumptions?: unknown;
+  ambiguities?: unknown;
+  participantNotes?: unknown;
+  itinerary?: unknown;
+  whyThisWorks?: unknown;
+  hiddenInsights?: unknown;
+};
+
+export type ItineraryBuildDebug = {
+  source: "llm" | "local";
+  rawDraft?: unknown;
+  fallbackReason?: string;
+};
+
+export type ItineraryBuildResult = {
+  plan: Plan;
+  debug: ItineraryBuildDebug;
 };
 
 function makeLocalDate(base: Date, hour: number, minute = 0): Date {
@@ -196,6 +228,141 @@ function inferBrief(rawInput: string): TripBrief {
   };
 }
 
+function asStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  }
+  return typeof value === "string" && value.trim() ? [value] : [];
+}
+
+function asStepDrafts(value: unknown): LlmItineraryStepDraft[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is LlmItineraryStepDraft => !!item && typeof item === "object");
+}
+
+function isBusinessType(value: unknown): value is BusinessType {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(DWELL_DURATION, value);
+}
+
+function clampDuration(type: BusinessType, duration: unknown): number {
+  if (typeof duration !== "number" || !Number.isFinite(duration)) return DWELL_DURATION[type];
+  const min = type === "cafe" ? 30 : 45;
+  const max = type === "restaurant" ? 90 : 120;
+  return Math.max(min, Math.min(max, Math.round(duration)));
+}
+
+function mergeUnique(...groups: string[][]): string[] {
+  return Array.from(new Set(groups.flat().map((item) => item.trim()).filter(Boolean)));
+}
+
+async function buildLlmPlanDraft(rawInput: string, inferred: TripBrief): Promise<LlmPlanDraft | null> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const baseURL = process.env.ARK_BASE_URL;
+  const model = process.env.ARK_MODEL_ID;
+
+  if (!apiKey || !baseURL || !model) return null;
+
+  const client = new OpenAI({ apiKey, baseURL });
+  const merchantDigest = MOCK_MERCHANTS.map((merchant) => ({
+    id: merchant.id,
+    name: merchant.name,
+    type: merchant.type,
+    address: merchant.address,
+    rating: merchant.rating,
+    priceLevel: merchant.priceLevel,
+    tags: merchant.tags,
+    sceneBlacklist: merchant.sceneBlacklist,
+    dietarySupport: merchant.dietarySupport,
+  }));
+
+  const response = await client.chat.completions.create({
+    model,
+    temperature: 0.2,
+    max_tokens: 1600,
+    messages: [
+      {
+        role: "system",
+        content: `你是美团本地生活行程规划 Agent 的规划草稿生成器。
+只输出 JSON，不要 Markdown。
+你负责读懂长文本生活场景，输出规划草稿；最终时间排布、商家匹配和可执行性校验会由规则代码完成。
+
+硬规则：
+- 城市固定杭州，区域默认西湖区。
+- 如果用户说“下午空的/几个小时”，按 14:00-18:00 理解。
+- 第一版只生成 1 个最佳方案。
+- 不要使用 core/weak 概念。
+- 餐厅不是必选，只有语义需要吃饭、补给、减脂餐时才安排。
+- 有孩子时避免成人向娱乐和高强度活动。
+- 输出 itinerary 时只允许 businessType 为 restaurant/cafe/shopping/entertainment/leisure/sport/culture。
+- 只输出 2 到 4 个步骤，宁可少而稳。
+
+输出结构：
+{
+  "userGoal": "一句话用户目标",
+  "preferences": ["隐性偏好"],
+  "constraints": ["硬约束"],
+  "assumptions": ["系统假设"],
+  "ambiguities": ["歧义和自动选择"],
+  "participantNotes": ["参与人洞察"],
+  "itinerary": [
+    {
+      "businessType": "leisure",
+      "durationMin": 60,
+      "goal": "这一站解决什么问题",
+      "whyRecommended": "推荐理由",
+      "suitabilityTags": ["亲子友好"]
+    }
+  ],
+  "whyThisWorks": ["为什么这套顺序合理"],
+  "hiddenInsights": ["挖掘出的隐性知识"]
+}`,
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          rawInput,
+          inferredDefaults: inferred,
+          availableMerchants: merchantDigest,
+        }),
+      },
+    ],
+  });
+
+  const text = response.choices[0]?.message?.content ?? "";
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("LLM plan draft did not contain JSON");
+  return JSON.parse(jsonMatch[0]) as LlmPlanDraft;
+}
+
+function mergeBriefWithDraft(inferred: TripBrief, draft: LlmPlanDraft | null): TripBrief {
+  if (!draft) return inferred;
+  return {
+    ...inferred,
+    userGoal: typeof draft.userGoal === "string" && draft.userGoal.trim() ? draft.userGoal : inferred.userGoal,
+    participants: {
+      ...inferred.participants,
+      notes: mergeUnique(inferred.participants.notes, asStringArray(draft.participantNotes)),
+    },
+    preferences: mergeUnique(inferred.preferences, asStringArray(draft.preferences)),
+    constraints: mergeUnique(inferred.constraints, asStringArray(draft.constraints)),
+    assumptions: mergeUnique(inferred.assumptions, asStringArray(draft.assumptions)),
+    ambiguities: mergeUnique(inferred.ambiguities, asStringArray(draft.ambiguities)),
+  };
+}
+
+function businessTypesFromDraft(rawInput: string, brief: TripBrief, draft: LlmPlanDraft | null): BusinessType[] {
+  const draftedTypes = asStepDrafts(draft?.itinerary)
+    .map((step) => step.businessType)
+    .filter(isBusinessType);
+  if (draftedTypes.length > 0) return Array.from(new Set(draftedTypes));
+  return inferBusinessTypes(rawInput, brief);
+}
+
+function stepDraftForType(draft: LlmPlanDraft | null, type: BusinessType, index: number): LlmItineraryStepDraft | undefined {
+  const steps = asStepDrafts(draft?.itinerary);
+  return steps.find((step) => step.businessType === type) ?? steps[index];
+}
+
 function merchantMatchesPreferences(merchant: Merchant, brief: TripBrief): number {
   let score = merchant.rating * 20 - (merchant.priceLevel - 1) * 4;
   if (brief.preferences.includes("亲子友好") && merchant.sceneBlacklist.includes("family")) score -= 60;
@@ -261,15 +428,18 @@ function taskValidation(merchant: Merchant | null, brief: TripBrief, startTime: 
   return items;
 }
 
-function buildReasoning(brief: TripBrief, tasks: Task[]): PlanReasoning {
+function buildReasoning(brief: TripBrief, tasks: Task[], draft: LlmPlanDraft | null): PlanReasoning {
+  const whyThisWorks = asStringArray(draft?.whyThisWorks);
+  const hiddenInsights = asStringArray(draft?.hiddenInsights);
+
   return {
     summary: `${brief.area} ${formatTime(brief.timeWindow.startTime)}-${formatTime(brief.timeWindow.endTime)} 的轻松同城行程`,
-    whyThisWorks: [
+    whyThisWorks: whyThisWorks.length > 0 ? whyThisWorks : [
       "先安排低负担活动，再进入正餐/补给，避免孩子一开始就疲劳",
       "所有任务都预留通勤缓冲，避免时间卡死",
       "商家优先选择西湖、湖滨、南山等近距离区域，符合“别离家太远”",
     ],
-    hiddenInsights: [
+    hiddenInsights: hiddenInsights.length > 0 ? hiddenInsights : [
       brief.preferences.includes("亲子友好")
         ? "5岁孩子更适合开放空间、短时段体验和可随时退出的活动"
         : "行程默认按低压力周末休闲节奏安排",
@@ -330,17 +500,30 @@ function buildPlanValidation(tasks: Task[], brief: TripBrief): PlanValidationIte
   ];
 }
 
-export function buildDemoItineraryPlan(rawInput: string, sessionId: string): Plan {
-  const brief = inferBrief(rawInput);
-  const requestedTypes = inferBusinessTypes(rawInput, brief);
+export async function buildItineraryPlan(rawInput: string, sessionId: string): Promise<ItineraryBuildResult> {
+  const inferredBrief = inferBrief(rawInput);
+  let draft: LlmPlanDraft | null = null;
+  let fallbackReason: string | undefined;
+
+  try {
+    draft = await buildLlmPlanDraft(rawInput, inferredBrief);
+  } catch (err) {
+    fallbackReason = err instanceof Error ? err.message : String(err);
+    draft = null;
+  }
+
+  const brief = mergeBriefWithDraft(inferredBrief, draft);
+  const requestedTypes = businessTypesFromDraft(rawInput, brief, draft);
   const planId = nanoid();
   const windowEnd = new Date(brief.timeWindow.endTime).getTime();
   const buffer = TRANSIT_BUFFER.auto;
   const tasks: Task[] = [];
   let cursor = brief.timeWindow.startTime;
 
-  for (const type of requestedTypes) {
-    const dwell = DWELL_DURATION[type];
+  for (let i = 0; i < requestedTypes.length; i++) {
+    const type = requestedTypes[i];
+    const stepDraft = stepDraftForType(draft, type, i);
+    const dwell = clampDuration(type, stepDraft?.durationMin);
     const taskEnd = addMinutes(cursor, dwell);
     if (new Date(taskEnd).getTime() > windowEnd) break;
 
@@ -355,15 +538,15 @@ export function buildDemoItineraryPlan(rawInput: string, sessionId: string): Pla
       type: "weak",
       businessType: type,
       title: merchant?.name ?? TYPE_LABEL[type],
-      description: TYPE_LABEL[type],
+      description: typeof stepDraft?.goal === "string" && stepDraft.goal.trim() ? stepDraft.goal : TYPE_LABEL[type],
       merchant,
       candidateMerchants: candidates,
       startTime: cursor,
       endTime: taskEnd,
       durationMin: dwell,
       travelToNextMin,
-      whyRecommended: buildTaskReason(type, brief, merchant),
-      suitabilityTags: buildSuitabilityTags(type, brief, merchant),
+      whyRecommended: buildTaskReason(type, brief, merchant, stepDraft),
+      suitabilityTags: buildSuitabilityTags(type, brief, merchant, stepDraft),
       validation: taskValidation(merchant, brief, cursor),
       status: "ready",
       retryCount: 0,
@@ -405,7 +588,7 @@ export function buildDemoItineraryPlan(rawInput: string, sessionId: string): Pla
   const intent = buildIntentFromBrief(rawInput, brief, requestedTypes);
   const now = new Date().toISOString();
 
-  return {
+  const plan: Plan = {
     id: planId,
     sessionId,
     intent,
@@ -413,14 +596,31 @@ export function buildDemoItineraryPlan(rawInput: string, sessionId: string): Pla
     tasks,
     status: "ready",
     constraintLevel: 0,
-    reasoning: buildReasoning(brief, tasks),
+    reasoning: buildReasoning(brief, tasks, draft),
     validation: buildPlanValidation(tasks, brief),
     createdAt: now,
     updatedAt: now,
   };
+
+  return {
+    plan,
+    debug: {
+      source: draft ? "llm" : "local",
+      rawDraft: draft ?? undefined,
+      fallbackReason,
+    },
+  };
 }
 
-function buildTaskReason(type: BusinessType, brief: TripBrief, merchant: Merchant | null): string {
+function buildTaskReason(
+  type: BusinessType,
+  brief: TripBrief,
+  merchant: Merchant | null,
+  draft?: LlmItineraryStepDraft
+): string {
+  if (typeof draft?.whyRecommended === "string" && draft.whyRecommended.trim()) {
+    return draft.whyRecommended;
+  }
   if (!merchant) return "当前类型暂未匹配到稳定候选，保留任务位等待替换";
   const reasons: string[] = [];
   if (brief.preferences.includes("亲子友好")) reasons.push("适合带孩子，不是高压活动");
@@ -430,8 +630,14 @@ function buildTaskReason(type: BusinessType, brief: TripBrief, merchant: Merchan
   return reasons.join("；");
 }
 
-function buildSuitabilityTags(type: BusinessType, brief: TripBrief, merchant: Merchant | null): string[] {
+function buildSuitabilityTags(
+  type: BusinessType,
+  brief: TripBrief,
+  merchant: Merchant | null,
+  draft?: LlmItineraryStepDraft
+): string[] {
   const tags = new Set<string>([TYPE_LABEL[type]]);
+  asStringArray(draft?.suitabilityTags).forEach((item) => tags.add(item));
   brief.preferences.forEach((item) => tags.add(item));
   merchant?.tags.slice(0, 2).forEach((item) => tags.add(item));
   return Array.from(tags);

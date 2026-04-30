@@ -1,29 +1,31 @@
-# MiniClaw — AI同城行程履约系统
+# MiniClaw — 美团同城行程规划 Agent Demo
 
-MiniClaw 是一个基于单 Agent 架构的同城短时行程规划与履约原型。系统采用「LLM 语义解析 + 自研硬规则引擎 + 原子工具执行」模式：LLM 只负责把自然语言转成结构化意图，核心排程、约束降级、预校验、重排和履约都由硬规则控制。
+MiniClaw 是一个面向 C 端用户的本地生活 Agent Demo/MVP。它服务于“给美团/本地生活平台展示 Agent 能力”的场景：用户输入一段自然语言生活描述，系统理解出行目标、参与人、时间、偏好和隐性约束，然后生成 1 个具体、合理、可执行的同城行程方案。
 
-## 当前状态
+当前重点是证明行程规划的合理性和可执行性，而不是复杂预约编排。
 
-V1.0 基础链路已收口：
+## 当前能力
 
-- 自然语言行程需求解析，支持豆包/Ark OpenAI 兼容接口；缺少 LLM 环境变量时自动走本地规则兜底。
-- 硬规则排程：核心任务、弱任务、时间窗口、通勤缓冲、连续业态去重、约束降级、极端兜底。
-- Supabase 持久化：`sessions`、`plans`、`tasks`、`executions`、`system_logs`、`user_profiles`。
-- 方案生成与执行拆分：`/api/run` 只生成 ready 方案，用户确认后 `/api/execute-plan` 执行。
-- 前端支持方案确认、任务卡「换一家」、刷新后恢复最近 active 会话。
-- Agent Memory V1.0：以 `sessionId` 作为临时 user id，使用 `user_profiles.memory_md` 和 `summary` 注入解析上下文。
+- 长文本场景理解：支持“周末双休、老婆孩子、孩子 5 岁、老婆减肥、别离家太远”这类叙述输入。
+- LLM 草稿 + 规则审核：LLM 负责读懂长文本并提出行程草稿，代码负责规范化、商家匹配、时间排布和可执行性校验。
+- 默认 demo 策略：城市固定杭州，默认西湖区；“下午空的”默认 14:00-18:00。
+- 单最佳方案：第一版只输出 1 个最佳行程，不做多方案对比。
+- 行程卡展示：时间、地点、业态、地址、推荐理由、适配标签。
+- 可执行性校验：时间无冲突、通勤缓冲、商家可用性、偏好匹配。
+- 隐性偏好解释：亲子友好、减脂轻食、近距离、轻松不赶。
+- 换一家：替换单个行程卡，并重新校验时间/通勤。
+- Supabase 状态源：写入失败会中断并提示，不允许继续确认。
+- mock 履约：用户确认后模拟执行。
 
-## 核心规则
+## 重要产品规则
 
-这些业务规则是系统边界，不应随意修改：
-
-1. 核心任务为 `type: "core"`，仅 `restaurant` 业态，失败触发全局重排。
-2. 弱任务为 `type: "weak"`，失败重试 3 次并静默替换，不触发全局重排。
-3. 用户指定起止时间锁死，不修改外部时间窗口。
-4. 任务零时间重叠，通勤缓冲为 `walk:20`、`bike:15`、`drive:20`、`transit:25` 分钟。
-5. 禁止连续同类业态。
-6. 约束降级为 level `0 -> 1 -> 2 -> 3`，最大 5 次迭代。
-7. 时间不足时自动精简为单项核心任务。
+- 不再使用 `core/weak` 作为产品概念。
+- `restaurant` 不是必选任务，只有用户表达吃饭、补给、减脂餐等需求时才安排。
+- 场景允许多标签，但进入 `preferences/constraints`，不要强行塞进单一 `scene`。
+- 用户确认前，方案必须已经成功保存到 Supabase。
+- Supabase 写入失败时，前端必须显示错误，不能继续确认执行。
+- 换一家默认不改变其他任务时间，但必须重新校验时间与通勤。
+- 不做多 Agent；所有可信边界由规则代码和运行时校验承担。
 
 ## 运行方式
 
@@ -39,7 +41,7 @@ bun install --force
 bun run dev
 ```
 
-如果 Bun shim 异常，也可以直接走本地 Next CLI：
+如果 Bun shim 异常，可以直接走本地 Next CLI：
 
 ```bash
 node node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port 3000
@@ -53,52 +55,66 @@ http://127.0.0.1:3000
 
 ## 验证
 
-推荐验证命令：
-
 ```bash
 node node_modules/typescript/bin/tsc --noEmit
 node node_modules/eslint/bin/eslint.js .
 node node_modules/next/dist/bin/next build
 ```
 
-`bun run lint` 和 `bun run build` 也可用，但在 Windows 上如果 Bun bin remap 出错，优先使用上面的 Node 直连命令。
-
 ## 环境变量
 
-复制 `.env.example` 到 `.env.local`，按需填写：
+复制 `.env.example` 到 `.env.local`：
 
 ```env
-# LLM 解析（可选，不填则本地硬规则兜底）
+# LLM 规划草稿（可选；无则走本地 demo planner）
 OPENAI_API_KEY=
 ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
 ARK_MODEL_ID=
 
-# Supabase（持久化必填）
+# Supabase（demo 状态源，运行核心功能必填）
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 ```
 
-服务端写入优先使用 `SUPABASE_SERVICE_ROLE_KEY`。如果缺少 Supabase 配置，生产构建不会被阻断，但运行 API 时无法完成真实持久化。
-
 ## API
 
-- `POST /api/run`：创建 session，解析需求，生成并预校验方案，返回 SSE；结束点是 `plan_ready`。
-- `POST /api/confirm-plan`：确认或取消已有方案，可附带微调。
-- `POST /api/execute-plan`：执行已确认方案，返回 SSE 任务状态、替换、重排和完成事件。
-- `POST /api/replace-task`：为单个任务替换同业态可用商家。
-- `GET /api/session/restore`：恢复最近 active session 及其当前 plan/tasks。
+- `POST /api/run`：长文本理解、生成行程、保存方案，返回 SSE。
+- `POST /api/confirm-plan`：确认或取消已有方案。
+- `POST /api/execute-plan`：执行已确认方案，返回 SSE。
+- `POST /api/replace-task`：替换单个行程卡，并返回替换后校验。
+- `GET /api/session/restore`：恢复最近 active session 和方案。
 
 ## 目录
 
 ```text
-src/agent/core/agent.ts        单 Agent 状态机
-src/agent/rules/planner.ts     硬规则排程与约束降级
-src/agent/tools/parser.ts      LLM/本地意图解析
-src/agent/tools/validator.ts   商家预校验
-src/agent/tools/executor.ts    并行执行、弱任务替换、核心失败重排
-src/app/page.tsx               前端交互页面
-src/app/api/*/route.ts         Next.js Route Handlers
-src/lib/db/queries.ts          Supabase 写入与 snake_case/camelCase 映射
-supabase/schema.sql            数据库结构
+src/agent/core/agent.ts          单 Agent 编排入口
+src/agent/rules/itinerary.ts     LLM 草稿 + 规则审核行程规划器
+src/app/page.tsx                 行程卡 Demo UI
+src/app/api/*/route.ts           Next.js Route Handlers
+src/lib/db/queries.ts            Supabase 写入和字段映射
+src/mock/merchants.ts            Demo 商家/地点库
+supabase/schema.sql              数据库结构
+```
+
+## 兼容说明
+
+当前 Supabase `tasks.type` 字段仍是旧表兼容字段，代码写入时会给默认值以适配现有 schema。产品逻辑不要使用 `core/weak`。
+
+## 规划架构
+
+```text
+长文本输入
+  ↓
+本地规则推断默认时间/参与人/偏好
+  ↓
+LLM 生成 TripBrief + itinerary 草稿（可选）
+  ↓
+规则代码过滤非法 businessType、压缩任务数量、限制时长
+  ↓
+规则代码匹配 mock 商家、排时间、插入通勤缓冲
+  ↓
+规则代码生成可执行性校验
+  ↓
+保存 Supabase，成功后才允许确认执行
 ```

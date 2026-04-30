@@ -1,26 +1,39 @@
 @AGENTS.md
 
-# MiniClaw — AI同城行程履约系统
+# MiniClaw — 美团同城行程规划 Agent Demo
 
 ## 项目背景
-基于 OpenClaw 单 Agent 架构的全自动同城行程规划履约系统。摒弃 LangChain/LangGraph，采用「LLM语义解析 + 自研硬规则引擎 + 原子工具并行执行」核心模式。
 
-聚焦个人用户短时同城出行场景，实现自然语言一键生成、智能编排、预校验核验、并行履约执行、故障自愈重排的全闭环。
+MiniClaw 是一个面向 C 端用户的同城行程规划 Agent Demo，用于展示本地生活平台如何从长文本生活场景中理解用户目标、挖掘隐性偏好，并生成可执行的行程卡。
+
+当前重点是证明“规划合理且可执行”，不是证明复杂履约编排。系统保留 mock 履约，但产品主链路是：
+
+长文本输入 → 场景理解 → 最佳行程方案 → 可执行性校验 → 用户确认 → mock 履约 / 换一家。
 
 ## 当前阶段
-V1.0 基础稳定版，核心链路已跑通。已完成：
-- Supabase 持久化（sessions/plans/tasks/executions/system_logs）
-- 方案生成与执行拆分（/api/run 只到 plan_ready，/api/execute-plan 负责确认后履约）
-- 手动微调 UI（任务卡「换一家」按钮）
-- 会话状态恢复（刷新后恢复未完成行程）
-- Agent Memory 基础版（user_profiles 表 + 偏好注入 parser）
-- Supabase 查询结果 snake_case → camelCase 映射
 
-待完成：V1.1 用户认证接入、真实商家履约 API、Agent Memory 摘要改为 LLM 压缩。
+Demo MVP 核心版。已完成：
+
+- 长文本 demo planner（固定杭州西湖区，下午默认 14:00-18:00）
+- LLM 规划草稿 + 规则代码审核，不做多 Agent
+- `TripBrief / PlanReasoning / PlanValidationItem` 新领域模型
+- 单最佳行程卡展示
+- 推荐理由、隐性偏好、可执行性校验展示
+- Supabase 持久化失败中断，不再吞错
+- `/api/run` 规划保存，`/api/execute-plan` 确认后执行
+- `/api/replace-task` 换一家并重新校验时间/通勤
 
 ## 关键决策
-- 单 Agent 大一统，无多 Agent 过度设计
-- LLM 仅辅助语义解析，核心逻辑全硬规则
-- Next.js 16.2.4 + Bun + Supabase + Vercel
-- 使用字节豆包/Volcano Ark 的 OpenAI 兼容接口，缺少环境变量时本地兜底解析
-- Agent Memory 用 sessionId 作为临时 userId，V1.1 接入认证后替换
+
+- 不再使用 core/weak 作为产品概念
+- 餐厅不是必选核心任务，只在语义需要时安排
+- 多场景输入进入 preferences/constraints，而不是单一 scene
+- Supabase 是 demo 的状态源；写库失败要直接暴露给前端
+- 当前 `tasks.type` 只是旧表兼容字段，不能驱动产品逻辑
+- LLM 原始草稿写入 system_logs，便于调试规划质量
+
+## 下一步
+
+- 用 Zod 或等价 schema 做运行时强校验
+- 增加真实距离/地图/商圈数据
+- 完善换一家后的路线级重新评分
