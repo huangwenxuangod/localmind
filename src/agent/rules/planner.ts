@@ -87,7 +87,7 @@ export function buildPlan(input: PlanningInput): Plan {
   const constraintLevel = input.constraintLevel ?? 0;
   const planId = nanoid();
 
-  const buffer = TRANSIT_BUFFER[intent.transport];
+  const buffer = TRANSIT_BUFFER[intent.transport] ?? TRANSIT_BUFFER.auto;
   const totalMin =
     (new Date(intent.endTime).getTime() - new Date(intent.startTime).getTime()) / 60_000;
 

@@ -48,6 +48,18 @@ const DIETARY_MAP: Record<string, string> = {
   "低糖": "低糖", "低油": "低油",
 };
 
+const VALID_TRANSPORTS: TransportMode[] = ["walk", "bike", "drive", "transit", "auto"];
+const VALID_SCENES: SceneTag[] = ["family", "elder", "diet", "solo", "couple", "social", "general"];
+const VALID_BUSINESS_TYPES: BusinessType[] = [
+  "restaurant",
+  "cafe",
+  "shopping",
+  "entertainment",
+  "leisure",
+  "sport",
+  "culture",
+];
+
 function extractKeyword<T>(text: string, map: Record<string, T>): T | null {
   for (const [key, val] of Object.entries(map)) {
     if (text.includes(key)) return val;
@@ -61,6 +73,25 @@ function extractAllKeywords<T>(text: string, map: Record<string, T>): T[] {
     if (text.includes(key)) found.add(val);
   }
   return Array.from(found);
+}
+
+function isTransportMode(value: unknown): value is TransportMode {
+  return typeof value === "string" && VALID_TRANSPORTS.includes(value as TransportMode);
+}
+
+function isSceneTag(value: unknown): value is SceneTag {
+  return typeof value === "string" && VALID_SCENES.includes(value as SceneTag);
+}
+
+function isBusinessType(value: unknown): value is BusinessType {
+  return typeof value === "string" && VALID_BUSINESS_TYPES.includes(value as BusinessType);
+}
+
+function asStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string");
+  }
+  return typeof value === "string" && value.trim() ? [value] : [];
 }
 
 // 从文本中提取时间（支持 "下午3点"、"15:00"、"3点半" 等格式）
@@ -177,6 +208,111 @@ export function parseIntentLocally(rawInput: string): ParsedIntent {
   };
 }
 
+function chooseScene(rawScene: unknown, fallback: SceneTag): { scene: SceneTag; extraScenes: SceneTag[] } {
+  if (isSceneTag(rawScene)) return { scene: rawScene, extraScenes: [] };
+
+  if (Array.isArray(rawScene)) {
+    const scenes = rawScene.filter(isSceneTag);
+    const priority: SceneTag[] = ["family", "elder", "couple", "social", "solo", "diet", "general"];
+    const scene = priority.find((candidate) => scenes.includes(candidate)) ?? fallback;
+    return {
+      scene,
+      extraScenes: scenes.filter((candidate) => candidate !== scene),
+    };
+  }
+
+  return { scene: fallback, extraScenes: [] };
+}
+
+function normalizeTimeRange(
+  candidateStart: unknown,
+  candidateEnd: unknown,
+  fallback: ParsedIntent
+): { startTime: string; endTime: string; corrections: string[]; contradictions: string[] } {
+  const corrections: string[] = [];
+  const contradictions: string[] = [];
+
+  let start = typeof candidateStart === "string" ? new Date(candidateStart) : new Date(NaN);
+  let end = typeof candidateEnd === "string" ? new Date(candidateEnd) : new Date(NaN);
+
+  if (Number.isNaN(start.getTime())) {
+    start = new Date(fallback.startTime);
+    corrections.push("开始时间解析失败，已使用本地规则兜底");
+  }
+
+  if (Number.isNaN(end.getTime())) {
+    end = new Date(fallback.endTime);
+    corrections.push("结束时间解析失败，已使用本地规则兜底");
+  }
+
+  if (end.getTime() <= start.getTime()) {
+    contradictions.push("结束时间早于或等于开始时间");
+    end = new Date(start.getTime() + 3 * 60 * 60_000);
+    corrections.push("结束时间无效，已按默认3小时行程修正");
+  }
+
+  return {
+    startTime: start.toISOString(),
+    endTime: end.toISOString(),
+    corrections,
+    contradictions,
+  };
+}
+
+function normalizeParsedIntent(rawInput: string, fallback: ParsedIntent, parsed: Record<string, unknown>): ParsedIntent {
+  const { scene, extraScenes } = chooseScene(parsed.scene, fallback.scene);
+  const timeRange = normalizeTimeRange(parsed.startTime, parsed.endTime, fallback);
+
+  const requestedTypes = Array.isArray(parsed.requestedTypes)
+    ? parsed.requestedTypes.filter(isBusinessType)
+    : fallback.requestedTypes;
+
+  const normalizedTypes = requestedTypes.length > 0 ? requestedTypes : fallback.requestedTypes;
+  const dedupedTypes = Array.from(new Set(normalizedTypes));
+
+  const preferences = [
+    ...asStringArray(fallback.preferences),
+    ...asStringArray(parsed.preferences),
+    ...extraScenes.map((item) => item === "diet" ? "减脂" : item),
+  ];
+
+  const dietary = [
+    ...asStringArray(fallback.dietary),
+    ...asStringArray(parsed.dietary),
+  ];
+
+  if (scene === "diet" || extraScenes.includes("diet") || rawInput.includes("减肥") || rawInput.includes("减脂")) {
+    if (!preferences.includes("减脂")) preferences.push("减脂");
+    if (!dietary.includes("低油")) dietary.push("低油");
+  }
+
+  return {
+    startTime: timeRange.startTime,
+    endTime: timeRange.endTime,
+    location: typeof parsed.location === "string" && parsed.location.trim() ? parsed.location : fallback.location,
+    radiusKm: typeof parsed.radiusKm === "number" && parsed.radiusKm > 0 ? parsed.radiusKm : fallback.radiusKm,
+    transport: isTransportMode(parsed.transport) ? parsed.transport : fallback.transport,
+    scene,
+    headcount: typeof parsed.headcount === "number" && parsed.headcount > 0 ? parsed.headcount : fallback.headcount,
+    dietary: Array.from(new Set(dietary)),
+    preferences: Array.from(new Set(preferences)),
+    requestedTypes: dedupedTypes,
+    rawInput,
+    contradictions: [
+      ...fallback.contradictions,
+      ...asStringArray(parsed.contradictions),
+      ...asStringArray(parsed.contradiction),
+      ...timeRange.contradictions,
+    ],
+    corrections: [
+      ...fallback.corrections,
+      ...asStringArray(parsed.corrections),
+      ...asStringArray(parsed.correctionSuggestion),
+      ...timeRange.corrections,
+    ],
+  };
+}
+
 import type { UserMemory } from "@/lib/db/queries";
 
 // 判断是否需要加载完整记忆（关键词触发）
@@ -249,12 +385,8 @@ export async function parseIntentWithLLM(
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error("LLM returned no valid JSON");
 
-    const parsed = JSON.parse(jsonMatch[0]);
-    return {
-      ...parseIntentLocally(rawInput), // fallback fields
-      ...parsed,
-      rawInput,
-    };
+    const parsed = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
+    return normalizeParsedIntent(rawInput, parseIntentLocally(rawInput), parsed);
   } catch (err) {
     console.error("[Parser] LLM parsing failed, using local fallback:", err);
     return parseIntentLocally(rawInput);
