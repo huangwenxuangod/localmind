@@ -1,12 +1,24 @@
 import { createClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "http://127.0.0.1:54321";
-const key =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  "missing-supabase-key";
+let client: SupabaseClient | null = null;
 
-export const db = createClient(url, key, {
-  auth: { persistSession: false },
-});
+export function getDb() {
+  if (client) return client;
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url) {
+    throw new Error("NEXT_PUBLIC_SUPABASE_URL is required for server persistence");
+  }
+
+  if (!serviceRoleKey) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY is required on the server; publishable/anon keys cannot write demo state with RLS enabled");
+  }
+
+  client = createClient(url, serviceRoleKey, {
+    auth: { persistSession: false },
+  });
+  return client;
+}

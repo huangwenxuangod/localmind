@@ -40,11 +40,10 @@ export async function runAgent(
 ): Promise<AgentState> {
   let state = makeInitialState(sessionId);
 
-  // 会话初始化落库
-  await upsertSession(sessionId);
-  insertLog({ sessionId, level: "info", phase: "idle", message: "会话已创建" });
-
   try {
+    await upsertSession(sessionId);
+    insertLog({ sessionId, level: "info", phase: "idle", message: "会话已创建" });
+
     state = transition(state, "parsing");
     emit(emitter, "parsing_start", { sessionId });
 

@@ -1,4 +1,4 @@
-import { db } from "./supabase";
+import { getDb } from "./supabase";
 import type {
   Plan,
   Task,
@@ -118,7 +118,7 @@ export async function upsertSession(
   if (update?.currentPlanId !== undefined) {
     row.current_plan_id = update.currentPlanId;
   }
-  const { error } = await db.from("sessions").upsert(row);
+  const { error } = await getDb().from("sessions").upsert(row);
   if (error) throw new Error(`[DB] upsertSession failed: ${error.message}`);
 }
 
@@ -131,7 +131,7 @@ export async function upsertPlan(plan: Plan) {
     __reasoning: plan.reasoning,
     __validation: plan.validation,
   };
-  const { error } = await db.from("plans").upsert({
+  const { error } = await getDb().from("plans").upsert({
     id: plan.id,
     session_id: plan.sessionId,
     intent: storedIntent,
@@ -163,14 +163,14 @@ export async function upsertTasks(tasks: Task[]) {
     replaced_from: t.replacedFrom,
     updated_at: new Date().toISOString(),
   }));
-  const { error } = await db.from("tasks").upsert(rows);
+  const { error } = await getDb().from("tasks").upsert(rows);
   if (error) throw new Error(`[DB] upsertTasks failed: ${error.message}`);
 }
 
 // ── Executions ────────────────────────────────────────────────────────────────
 
 export async function insertExecution(result: ExecutionResult, planId: string) {
-  const { error } = await db.from("executions").insert({
+  const { error } = await getDb().from("executions").insert({
     task_id: result.taskId,
     plan_id: planId,
     success: result.success,
@@ -184,7 +184,7 @@ export async function insertExecution(result: ExecutionResult, planId: string) {
 // ── Queries ────────────────────────────────────────────────────────────────────
 
 export async function getTaskById(taskId: string): Promise<Task | null> {
-  const { data, error } = await db
+  const { data, error } = await getDb()
     .from("tasks")
     .select("*")
     .eq("id", taskId)
@@ -197,7 +197,7 @@ export async function getTaskById(taskId: string): Promise<Task | null> {
 }
 
 export async function getPlanById(planId: string): Promise<Plan | null> {
-  const { data, error } = await db
+  const { data, error } = await getDb()
     .from("plans")
     .select("*")
     .eq("id", planId)
@@ -210,7 +210,7 @@ export async function getPlanById(planId: string): Promise<Plan | null> {
 }
 
 export async function getTasksByPlanId(planId: string): Promise<Task[]> {
-  const { data, error } = await db
+  const { data, error } = await getDb()
     .from("tasks")
     .select("*")
     .eq("plan_id", planId)
@@ -223,7 +223,7 @@ export async function getTasksByPlanId(planId: string): Promise<Task[]> {
 }
 
 export async function getLatestActiveSession(): Promise<Session | null> {
-  const { data, error } = await db
+  const { data, error } = await getDb()
     .from("sessions")
     .select("*")
     .eq("status", "active")
@@ -248,7 +248,7 @@ export function insertLog(params: {
   payload?: unknown;
 }) {
   // fire-and-forget
-  db.from("system_logs")
+  getDb().from("system_logs")
     .insert({
       session_id: params.sessionId,
       plan_id: params.planId ?? null,
