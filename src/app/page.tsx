@@ -35,6 +35,7 @@ export default function HomePage() {
   const [plan, setPlan] = useState<Plan | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
+  const [readyToConfirm, setReadyToConfirm] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -73,6 +74,7 @@ export default function HomePage() {
         const data = await res.json();
         if (data.session && data.plan) {
           setPlan(data.plan);
+          setReadyToConfirm(data.plan.status === "ready");
           setInput(data.plan.intent.rawInput);
           appendLog("已恢复最近未完成方案");
         }
@@ -91,14 +93,13 @@ export default function HomePage() {
     if (event.type === "parsing_done") appendLog("已提取出行目标、参与人和偏好");
     if (event.type === "planning_start") appendLog("正在生成可执行行程");
     if (event.type === "planning_done") {
-      const nextPlan = (event.payload as { plan: Plan }).plan;
-      setPlan(nextPlan);
-      appendLog("已生成行程卡");
+      appendLog("方案草稿已生成，正在保存和校验");
     }
     if (event.type === "validation_done") appendLog("可执行性校验完成");
     if (event.type === "plan_ready") {
       const nextPlan = (event.payload as { plan: Plan }).plan;
       setPlan(nextPlan);
+      setReadyToConfirm(nextPlan.status === "ready");
       appendLog("方案已保存，等待确认");
       setRunning(false);
     }
@@ -143,6 +144,7 @@ export default function HomePage() {
     setRunning(true);
     setError(null);
     setPlan(null);
+    setReadyToConfirm(false);
     setLogs([]);
     abortRef.current = new AbortController();
 
@@ -171,7 +173,7 @@ export default function HomePage() {
   };
 
   const handleConfirm = async () => {
-    if (!plan || running) return;
+    if (!plan || running || !readyToConfirm) return;
     setRunning(true);
     setError(null);
 
@@ -231,6 +233,7 @@ export default function HomePage() {
           validation: data.validation ?? prev.validation,
         };
       });
+      setReadyToConfirm(true);
       appendLog(data.message ?? "已替换并重新校验");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -246,8 +249,8 @@ export default function HomePage() {
       <div className="mx-auto flex max-w-6xl flex-col gap-6 px-5 py-8">
         <header className="flex flex-col gap-1">
           <p className="text-sm font-medium text-blue-700">MiniClaw Agent Demo</p>
-          <h1 className="text-3xl font-bold tracking-normal">美团同城行程规划</h1>
-          <p className="text-sm text-slate-500">长文本场景理解、行程卡生成、可执行性校验、mock 履约闭环</p>
+          <h1 className="text-3xl font-bold tracking-normal">诚实可执行的本地生活方案</h1>
+          <p className="text-sm text-slate-500">长文本理解、有限 AI 自由、规则二次校验、持久化成功后确认</p>
         </header>
 
         <section className="grid gap-5 lg:grid-cols-[420px_1fr]">
@@ -291,7 +294,7 @@ export default function HomePage() {
           <div className="flex flex-col gap-5">
             {!plan ? (
               <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white text-sm text-slate-400">
-                生成后这里会展示行程卡、推荐理由和可执行性校验
+                持久化成功后这里会展示行程卡、推荐理由和可执行性校验
               </div>
             ) : (
               <>
@@ -312,10 +315,10 @@ export default function HomePage() {
                     <button
                       type="button"
                       onClick={handleConfirm}
-                      disabled={running}
+                      disabled={running || !readyToConfirm}
                       className="rounded-md bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-700 disabled:bg-slate-300"
                     >
-                      确认并 mock 履约
+                      {readyToConfirm ? "确认并 mock 履约" : "等待保存校验"}
                     </button>
                   </div>
 
@@ -348,10 +351,11 @@ export default function HomePage() {
                       </div>
                       <div className="grid gap-2 text-sm">
                         <ScoreBar label="时间合理" value={plan.score.timeFit} />
+                        <ScoreBar label="距离适配" value={plan.score.distanceFit ?? plan.score.routeFit} />
                         <ScoreBar label="路线稳定" value={plan.score.routeFit} />
-                        <ScoreBar label="偏好匹配" value={plan.score.preferenceFit} />
-                        <ScoreBar label="商家可靠" value={plan.score.merchantFit} />
-                        <ScoreBar label="节奏轻松" value={plan.score.relaxationFit} />
+                        <ScoreBar label="场景匹配" value={plan.score.sceneFit ?? plan.score.preferenceFit} />
+                        <ScoreBar label="商家可信" value={plan.score.merchantTrust ?? plan.score.merchantFit} />
+                        <ScoreBar label="诚实边界" value={plan.score.honestyFit ?? plan.score.relaxationFit} />
                       </div>
                       <div className="mt-4 space-y-2 text-sm leading-6 text-slate-600">
                         {plan.score.reasons.map((reason) => <p key={reason}>{reason}</p>)}
@@ -463,6 +467,11 @@ function ItineraryCard({
             </p>
             <p className="mt-2 text-sm leading-6 text-slate-600">{task.whyRecommended}</p>
             {task.merchant?.address && <p className="mt-1 text-sm text-slate-400">{task.merchant.address}</p>}
+            {task.routeFromPrevious && (
+              <p className="mt-2 rounded-md bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800">
+                路线证据：{task.routeFromPrevious.explanation}
+              </p>
+            )}
           </div>
         </div>
         <button
@@ -482,6 +491,22 @@ function ItineraryCard({
           </span>
         ))}
       </div>
+
+      {task.riskNotes && task.riskNotes.length > 0 && (
+        <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
+          <div className="font-semibold">风险提示</div>
+          <div className="mt-1">{task.riskNotes.join("；")}</div>
+        </div>
+      )}
+
+      {task.verification && (
+        <div className="mt-3 rounded-md bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+          <div className="font-semibold text-slate-700">
+            诚实边界：{task.verification.status === "needs_realtime_check" ? "需实时确认" : task.verification.status}
+          </div>
+          <div className="mt-1">{task.verification.notes.join("；")}</div>
+        </div>
+      )}
 
       {task.validation && task.validation.length > 0 && (
         <div className="mt-4 grid gap-2 md:grid-cols-3">

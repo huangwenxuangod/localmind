@@ -1,0 +1,207 @@
+import type { ScenarioRule, WeatherRule } from "./types";
+
+export const SCENARIO_RULES: ScenarioRule[] = [
+  {
+    id: "family_light_half_day",
+    name: "亲子轻松半日",
+    triggerKeywords: ["孩子", "小孩", "娃", "亲子", "别太累", "轻松玩"],
+    inferredPreferences: ["亲子友好", "低强度", "近距离", "可随时退出", "轻松不赶"],
+    inferredConstraints: ["避免成人向娱乐", "避免长距离步行", "避免高排队风险"],
+    placeTypePreferences: ["leisure", "parent_child", "culture", "restaurant", "shopping"],
+    placeTypeAvoid: ["bar", "script_kill", "high_intensity_sport", "adult_entertainment"],
+    routeConstraints: {
+      maxFirstLegMin: 25,
+      maxTotalTravelMin: 45,
+      maxWalkMeters: 1200,
+    },
+    defaultTimeWindow: {
+      start: "14:00",
+      end: "18:00",
+      reason: "下午空的默认按 14:00-18:00 安排，适合低强度亲子半日",
+    },
+    explanationTemplates: [
+      "有孩子同行，优先选择低强度、可休息、可随时退出的地点",
+      "控制首段通勤，避免一开始就消耗体力",
+      "如果天气不好，优先切换到室内亲子或商场动线",
+    ],
+  },
+  {
+    id: "friends_shopping_dining",
+    name: "朋友逛街吃饭",
+    triggerKeywords: ["朋友", "逛街", "商场", "吃晚饭", "聚一下", "聊天"],
+    inferredPreferences: ["朋友聚会", "商圈集中", "餐饮衔接", "不赶路"],
+    inferredConstraints: ["路线不过度折返", "餐厅适合聊天", "换一家优先同商圈"],
+    placeTypePreferences: ["shopping", "restaurant", "cafe", "entertainment"],
+    placeTypeAvoid: ["remote_scenic_spot", "long_walk"],
+    routeConstraints: {
+      maxFirstLegMin: 35,
+      maxTotalTravelMin: 60,
+      maxWalkMeters: 1800,
+    },
+    defaultTimeWindow: {
+      start: "14:00",
+      end: "18:00",
+      reason: "下午逛街后衔接早晚餐，避免正晚高峰排队过长",
+    },
+    explanationTemplates: [
+      "朋友场景优先选商圈集中、饭后还能继续逛的区域",
+      "餐厅要能聊天，避免过吵或强翻台压力",
+      "不吃辣等饮食约束会优先过滤餐厅候选",
+    ],
+  },
+  {
+    id: "couple_relaxed_date",
+    name: "情侣/夫妻轻松约会",
+    triggerKeywords: ["老婆", "女朋友", "男朋友", "对象", "约会", "环境好", "走走"],
+    inferredPreferences: ["氛围好", "拍照友好", "轻松不赶", "环境稳定"],
+    inferredConstraints: ["避免排队过久", "避免过吵", "路线顺路"],
+    placeTypePreferences: ["leisure", "cafe", "restaurant", "shopping", "culture"],
+    placeTypeAvoid: ["child_only", "noisy_arcade", "high_intensity_sport"],
+    routeConstraints: {
+      maxFirstLegMin: 35,
+      maxTotalTravelMin: 70,
+      maxWalkMeters: 1600,
+    },
+    defaultTimeWindow: {
+      start: "14:00",
+      end: "18:00",
+      reason: "下午轻松走走加早晚餐，能保留约会氛围又不赶",
+    },
+    explanationTemplates: [
+      "情侣/夫妻场景优先考虑环境、拍照和聊天体验",
+      "可接受为高质量地点稍微跨区，但要解释通勤成本",
+      "餐厅优先选排队风险低、环境更稳定的候选",
+    ],
+  },
+  {
+    id: "elder_stable_half_day",
+    name: "长辈稳妥半日",
+    triggerKeywords: ["爸妈", "父母", "长辈", "老人", "不累", "稳妥"],
+    inferredPreferences: ["长辈友好", "低强度", "真实体验", "少走路", "稳定不踩雷"],
+    inferredConstraints: ["避免长距离步行", "避免排队过久", "优先室内/展馆/成熟商圈", "餐饮口味稳妥"],
+    placeTypePreferences: ["culture", "leisure", "shopping", "restaurant"],
+    placeTypeAvoid: ["high_intensity_sport", "noisy_arcade", "long_walk"],
+    routeConstraints: {
+      maxFirstLegMin: 30,
+      maxTotalTravelMin: 60,
+      maxWalkMeters: 1000,
+    },
+    defaultTimeWindow: {
+      start: "14:00",
+      end: "18:00",
+      reason: "长辈同行默认选择下午低强度窗口，避免早晚高峰和赶场",
+    },
+    explanationTemplates: [
+      "长辈场景不追求点多，优先稳妥、少走路、容易休息",
+      "餐饮优先本地认可、口味稳定、环境不嘈杂的候选",
+    ],
+  },
+  {
+    id: "solo_quiet_relax",
+    name: "单人安静放松",
+    triggerKeywords: ["一个人", "自己", "放松", "坐坐", "别太吵", "安静"],
+    inferredPreferences: ["安静", "轻松不赶", "真实体验", "可久坐"],
+    inferredConstraints: ["避免过吵", "避免强社交娱乐场景", "通勤不要折腾"],
+    placeTypePreferences: ["cafe", "culture", "leisure", "restaurant"],
+    placeTypeAvoid: ["noisy_arcade", "crowded_mall"],
+    routeConstraints: {
+      maxFirstLegMin: 30,
+      maxTotalTravelMin: 50,
+      maxWalkMeters: 1600,
+    },
+    explanationTemplates: [
+      "单人放松更重视环境和停留舒适度，而不是热门程度",
+      "如果餐饮只是补给，优先轻食、咖啡或低排队餐厅",
+    ],
+  },
+  {
+    id: "value_for_money",
+    name: "预算和优惠优先",
+    triggerKeywords: ["预算", "别太贵", "便宜", "团购", "优惠", "性价比"],
+    inferredPreferences: ["低预算", "优惠价值", "性价比", "不寒酸"],
+    inferredConstraints: ["避免高价精致餐饮", "优先有套餐/团购/停车优惠", "不能只因便宜牺牲体验"],
+    placeTypePreferences: ["shopping", "restaurant", "cafe", "leisure"],
+    placeTypeAvoid: ["pricey_fine_dining", "low_quality"],
+    routeConstraints: {
+      maxFirstLegMin: 35,
+      maxTotalTravelMin: 60,
+    },
+    explanationTemplates: [
+      "低预算不是只找最便宜，而是在评分、距离、真实体验和优惠之间取平衡",
+    ],
+  },
+];
+
+export const DIET_SCENARIO_RULES: ScenarioRule[] = [
+  {
+    id: "diet_no_spicy",
+    name: "不吃辣",
+    triggerKeywords: ["不吃辣", "怕辣", "不要辣", "清淡点"],
+    inferredPreferences: ["不辣友好", "清淡"],
+    inferredConstraints: ["餐厅辣度低", "避免川湘重辣"],
+    placeTypePreferences: ["restaurant", "cafe"],
+    placeTypeAvoid: ["spicy_hotpot", "sichuan_spicy", "hunan_spicy"],
+    routeConstraints: {},
+    explanationTemplates: ["检测到不吃辣，餐厅优先选择江浙菜、轻食或低辣度商家"],
+  },
+  {
+    id: "diet_fitness_light",
+    name: "减脂/清淡",
+    triggerKeywords: ["减肥", "减脂", "低卡", "轻食", "少油", "低糖"],
+    inferredPreferences: ["减脂友好", "清淡", "低油", "低糖"],
+    inferredConstraints: ["餐厅需支持低油低糖或轻食", "避免高油重口味"],
+    placeTypePreferences: ["restaurant", "cafe", "leisure"],
+    placeTypeAvoid: ["buffet", "fried_food", "heavy_oil"],
+    routeConstraints: {},
+    explanationTemplates: ["检测到减脂诉求，餐饮选择不只看评分，还要看清淡和低油低糖支持"],
+  },
+  {
+    id: "diet_child_friendly",
+    name: "儿童友好饮食",
+    triggerKeywords: ["孩子吃", "小孩能吃", "儿童餐", "带孩子吃"],
+    inferredPreferences: ["儿童友好", "不辣友好", "清淡"],
+    inferredConstraints: ["避免重口味", "优先家庭餐厅"],
+    placeTypePreferences: ["restaurant", "shopping"],
+    placeTypeAvoid: ["bar", "late_night_drink"],
+    routeConstraints: {},
+    explanationTemplates: ["儿童同行时，餐厅需要兼顾口味清淡、座位和洗手间便利"],
+  },
+];
+
+export const WEATHER_RULES: WeatherRule[] = [
+  {
+    condition: "rain",
+    affectedTags: ["户外", "景区", "公园", "散步"],
+    preferTags: ["室内", "商场", "展馆", "亲子乐园"],
+    penalty: 30,
+    explanation: "雨天降低户外景区权重，优先室内亲子、商场或展馆动线",
+  },
+  {
+    condition: "heavy_rain",
+    affectedTags: ["户外", "景区", "骑行", "长距离步行"],
+    preferTags: ["室内", "地铁方便", "可停车"],
+    penalty: 55,
+    explanation: "大雨场景不推荐长距离户外，路线要优先打车或地铁可达",
+  },
+  {
+    condition: "hot",
+    affectedTags: ["高温暴晒", "户外", "长时间排队"],
+    preferTags: ["室内", "阴凉", "商场", "咖啡"],
+    penalty: 35,
+    explanation: "高温会放大亲子疲劳风险，减少暴晒和户外停留时长",
+  },
+  {
+    condition: "cold",
+    affectedTags: ["户外", "江边观景", "夜间散步"],
+    preferTags: ["室内", "热饮", "展馆"],
+    penalty: 20,
+    explanation: "低温时降低户外观景权重，增加室内和热饮补给",
+  },
+  {
+    condition: "windy",
+    affectedTags: ["江边", "湖边", "户外拍照"],
+    preferTags: ["室内", "商场", "餐厅"],
+    penalty: 18,
+    explanation: "大风会影响湖边/江边体验，优先选择有室内备选的路线",
+  },
+];

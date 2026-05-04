@@ -107,6 +107,12 @@ export interface PlanScore {
   preferenceFit: number;
   merchantFit: number;
   relaxationFit: number;
+  distanceFit?: number;
+  sceneFit?: number;
+  merchantTrust?: number;
+  dealValue?: number;
+  friction?: number;
+  honestyFit?: number;
   reasons: string[];
 }
 
@@ -153,6 +159,22 @@ export interface Task {
   whyRecommended?: string;
   suitabilityTags?: string[];
   validation?: PlanValidationItem[];
+  routeFromPrevious?: {
+    mode: TransportMode;
+    distanceMeters: number;
+    durationMin: number;
+    routeShape: string;
+    frictionLevel: number;
+    childFriendly: boolean;
+    explanation: string;
+  };
+  riskNotes?: string[];
+  evidence?: string[];
+  dealTags?: string[];
+  verification?: {
+    status: "verified" | "estimated" | "needs_realtime_check" | "unsafe" | "unknown";
+    notes: string[];
+  };
   status: TaskStatus;
   // DB v1 compatibility fields.
   retryCount: number;

@@ -4,7 +4,13 @@
 
 import { getTaskById, getPlanById, getTasksByPlanId, upsertTasks } from "@/lib/db/queries";
 import { validateMerchant } from "@/mock/fulfillment";
-import { getMerchantsByType } from "@/mock/merchants";
+import {
+  DEFAULT_CURRENT_LOCATION,
+  LOCAL_LIFE_PLACES,
+  estimateRoute,
+  getLocalLifePlaceById,
+  localPlaceToMerchant,
+} from "@/mock/local-life";
 import type { Task } from "@/types";
 
 export async function POST(req: Request) {
@@ -41,11 +47,16 @@ export async function POST(req: Request) {
       (m) => !triedIds.has(m.id)
     );
 
-    // 候选列表不足时，从同业态商家库补充
+    // 候选列表不足时，从杭州本地生活 mock 数据补充，避免回到旧商家库
     if (alternatives.length < 3) {
-      const extras = getMerchantsByType(task.businessType).filter(
-        (m) => !triedIds.has(m.id) && !alternatives.find((a) => a.id === m.id)
-      );
+      const extras = LOCAL_LIFE_PLACES
+        .filter((place) => {
+          const mapped = localPlaceToMerchant(place);
+          return mapped.type === task.businessType
+            && !triedIds.has(mapped.id)
+            && !alternatives.find((a) => a.id === mapped.id);
+        })
+        .map(localPlaceToMerchant);
       alternatives = [...alternatives, ...extras];
     }
 
@@ -64,15 +75,46 @@ export async function POST(req: Request) {
 
     if (replacement) {
       const alt = replacement.merchant;
+      const tasksBeforeUpdate = await getTasksByPlanId(planId);
+      const previousTask = [...tasksBeforeUpdate]
+        .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
+        .find((item) => new Date(item.endTime).getTime() <= new Date(task.startTime).getTime() && item.id !== task.id);
+      const fromPlace = previousTask?.merchant ? getLocalLifePlaceById(previousTask.merchant.id) : undefined;
+      const altPlace = getLocalLifePlaceById(alt.id);
+      const route = altPlace
+        ? estimateRoute(fromPlace ?? DEFAULT_CURRENT_LOCATION, altPlace, {
+            mode: plan.intent.transport,
+            familyWithChild: plan.brief?.participants.children ? plan.brief.participants.children > 0 : false,
+          })
+        : null;
       const updatedTask: Task = {
         ...task,
         title: alt.name,
-        whyRecommended: `已替换为同业态可用地点；${alt.rating.toFixed(1)} 分，仍保持原时间段和路线节奏`,
+        whyRecommended: `已替换为同业态可用地点；${alt.rating.toFixed(1)} 分。${route ? route.explanation : "路线为静态估计，需实时确认"}`,
         suitabilityTags: Array.from(new Set([task.businessType, ...alt.tags.slice(0, 2), ...(plan.brief?.preferences ?? [])])),
         validation: [
           { label: "时间可用", status: "pass", detail: "替换商家通过当前时段可用性校验" },
-          { label: "路线影响", status: "pass", detail: "保持同业态与原时间段，不改变后续行程时间" },
+          {
+            label: "路线影响",
+            status: route && route.frictionLevel <= 3 ? "pass" : "warn",
+            detail: route ? route.explanation : "未找到本地生活地点坐标，只能保持原时间段",
+          },
+          { label: "诚实边界", status: "warn", detail: "换一家仅完成静态校验，实时排队/闭店/施工仍需平台二次确认" },
         ],
+        routeFromPrevious: route ? {
+          mode: route.mode,
+          distanceMeters: route.distanceMeters,
+          durationMin: route.durationMin,
+          routeShape: route.routeShape,
+          frictionLevel: route.frictionLevel,
+          childFriendly: route.childFriendly,
+          explanation: route.explanation,
+        } : task.routeFromPrevious,
+        riskNotes: route && route.frictionLevel >= 4 ? ["替换后通勤摩擦升高，建议用户确认是否接受"] : ["替换保持原时间段，需实时确认排队和营业"],
+        verification: {
+          status: "needs_realtime_check",
+          notes: ["已完成静态替换校验", "执行前仍需确认实时营业、排队和路线"],
+        },
         merchant: alt,
         status: "replaced",
         replacedFrom: currentMerchantId || null,

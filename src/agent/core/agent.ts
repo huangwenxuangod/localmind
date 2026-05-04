@@ -2,7 +2,7 @@ import type {
   AgentState, AgentPhase, SSEEvent, SSEEventType,
   TaskUpdatePayload, Task, TaskStatus, Plan,
 } from "@/types";
-import { buildItineraryPlan } from "../rules/itinerary";
+import { buildItineraryPlan } from "../rules/honest-itinerary";
 import { executeMerchantBooking } from "@/mock/fulfillment";
 import { upsertSession, upsertPlan, upsertTasks, insertLog, insertExecution } from "@/lib/db/queries";
 
@@ -54,7 +54,21 @@ export async function runAgent(
     state = transition(state, "planning");
     emit(emitter, "planning_start", {});
 
-    emit(emitter, "planning_done", { plan });
+    emit(emitter, "planning_done", {
+      taskCount: plan.tasks.length,
+      plannerSource: debug.source,
+      persisted: false,
+      message: "方案草稿已生成，正在做持久化闸门校验",
+    });
+
+    state = transition(state, "pre_validating");
+    emit(emitter, "validation_start", { taskCount: plan.tasks.length });
+
+    emit(emitter, "validation_done", {
+      allReady: plan.validation?.every((item) => item.status !== "fail") ?? true,
+      failedCount: plan.validation?.filter((item) => item.status === "fail").length ?? 0,
+      report: plan.validation ?? [],
+    });
 
     await upsertPlan(plan);
     await upsertTasks(plan.tasks);
@@ -68,15 +82,6 @@ export async function runAgent(
         llmDraft: debug.rawDraft,
         fallbackReason: debug.fallbackReason,
       },
-    });
-
-    state = transition(state, "pre_validating");
-    emit(emitter, "validation_start", { taskCount: plan.tasks.length });
-
-    emit(emitter, "validation_done", {
-      allReady: plan.validation?.every((item) => item.status !== "fail") ?? true,
-      failedCount: plan.validation?.filter((item) => item.status === "fail").length ?? 0,
-      report: plan.validation ?? [],
     });
 
     state = { ...state, plan, phase: "awaiting_confirm" };

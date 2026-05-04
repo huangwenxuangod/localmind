@@ -1,6 +1,7 @@
 // Mock履约API — 模拟商家预约/预校验接口
 import type { ValidationResult, ExecutionResult } from "@/types";
 import { getMerchantById } from "./merchants";
+import { getLocalLifePlaceById, localPlaceToMerchant } from "./local-life";
 
 // 模拟网络延迟
 function delay(ms: number) {
@@ -17,7 +18,9 @@ export async function validateMerchant(
   await delay(100 + Math.random() * 200);
 
   const merchant = getMerchantById(merchantId);
-  if (!merchant) {
+  const localPlace = getLocalLifePlaceById(merchantId);
+  const resolvedMerchant = merchant ?? (localPlace ? localPlaceToMerchant(localPlace) : null);
+  if (!resolvedMerchant) {
     return { merchantId, available: false, reason: "商家不存在" };
   }
 
@@ -25,15 +28,15 @@ export async function validateMerchant(
   const dayOfWeek = start.getDay() as 0|1|2|3|4|5|6;
   const timeStr = `${String(start.getHours()).padStart(2, "0")}:${String(start.getMinutes()).padStart(2, "0")}`;
 
-  const todayHours = merchant.openHours.find((h) => h.day === dayOfWeek);
+  const todayHours = resolvedMerchant.openHours.find((h) => h.day === dayOfWeek);
   if (!todayHours) {
     return { merchantId, available: false, reason: "今日不营业" };
   }
   if (timeStr < todayHours.open || timeStr >= todayHours.close) {
     return { merchantId, available: false, reason: `营业时间 ${todayHours.open}-${todayHours.close}，不在时段内` };
   }
-  if (headcount > merchant.capacity) {
-    return { merchantId, available: false, reason: `容量不足（最大${merchant.capacity}人）` };
+  if (headcount > resolvedMerchant.capacity) {
+    return { merchantId, available: false, reason: `容量不足（最大${resolvedMerchant.capacity}人）` };
   }
 
   // 模拟5%随机不可用（满座等）
@@ -55,7 +58,9 @@ export async function executeMerchantBooking(
   await delay(200 + Math.random() * 500);
 
   const merchant = getMerchantById(merchantId);
-  if (!merchant) {
+  const localPlace = getLocalLifePlaceById(merchantId);
+  const resolvedMerchant = merchant ?? (localPlace ? localPlaceToMerchant(localPlace) : null);
+  if (!resolvedMerchant) {
     return { taskId: "", success: false, merchant: null, failureReason: "商家不存在", executedAt: new Date().toISOString() };
   }
 
@@ -64,7 +69,7 @@ export async function executeMerchantBooking(
     return {
       taskId: "",
       success: false,
-      merchant,
+      merchant: resolvedMerchant,
       failureReason: "预约系统异常，请稍后重试",
       executedAt: new Date().toISOString(),
     };
@@ -73,7 +78,7 @@ export async function executeMerchantBooking(
   return {
     taskId: "",
     success: true,
-    merchant,
+    merchant: resolvedMerchant,
     executedAt: new Date().toISOString(),
   };
 }
