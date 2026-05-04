@@ -125,6 +125,51 @@ CREATE INDEX IF NOT EXISTS idx_system_logs_session ON system_logs(session_id);
 CREATE INDEX IF NOT EXISTS idx_system_logs_level   ON system_logs(level);
 CREATE INDEX IF NOT EXISTS idx_system_logs_created ON system_logs(created_at DESC);
 
--- RLS 说明：
--- Demo 阶段推荐所有 Supabase 写入都走服务端 SUPABASE_SERVICE_ROLE_KEY。
--- 如果启用 RLS，不需要给 anon/publishable key 写入策略。
+-- RLS / API key 说明：
+-- Supabase 新 key 体系中：
+-- - sb_publishable_* 对应旧 anon，用于低权限公开访问
+-- - sb_secret_* 对应旧 service_role，用于服务端高权限访问
+-- 当前 demo 没有登录用户，若使用 publishable key，必须允许 anon 访问 demo 表。
+-- 这些 policy 只适合 demo，不适合生产多用户数据隔离。
+
+ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE plans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE executions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE system_logs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "demo_anon_all_sessions" ON sessions;
+DROP POLICY IF EXISTS "demo_anon_all_plans" ON plans;
+DROP POLICY IF EXISTS "demo_anon_all_tasks" ON tasks;
+DROP POLICY IF EXISTS "demo_anon_all_executions" ON executions;
+DROP POLICY IF EXISTS "demo_anon_all_system_logs" ON system_logs;
+
+CREATE POLICY "demo_anon_all_sessions"
+  ON sessions FOR ALL
+  TO anon
+  USING (true)
+  WITH CHECK (true);
+
+CREATE POLICY "demo_anon_all_plans"
+  ON plans FOR ALL
+  TO anon
+  USING (true)
+  WITH CHECK (true);
+
+CREATE POLICY "demo_anon_all_tasks"
+  ON tasks FOR ALL
+  TO anon
+  USING (true)
+  WITH CHECK (true);
+
+CREATE POLICY "demo_anon_all_executions"
+  ON executions FOR ALL
+  TO anon
+  USING (true)
+  WITH CHECK (true);
+
+CREATE POLICY "demo_anon_all_system_logs"
+  ON system_logs FOR ALL
+  TO anon
+  USING (true)
+  WITH CHECK (true);

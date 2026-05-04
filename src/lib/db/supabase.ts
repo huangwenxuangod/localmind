@@ -7,17 +7,17 @@ export function getDb() {
   if (client) return client;
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const key =process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
   if (!url) {
     throw new Error("NEXT_PUBLIC_SUPABASE_URL is required for server persistence");
   }
 
-  if (!serviceRoleKey) {
-    throw new Error("SUPABASE_SERVICE_ROLE_KEY is required on the server; publishable/anon keys cannot write demo state with RLS enabled");
+  if (!key) {
+    throw new Error("A Supabase API key is required: use SUPABASE_SECRET_KEY, SUPABASE_SERVICE_ROLE_KEY, or NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY");
   }
 
-  client = createClient(url, serviceRoleKey, {
+  client = createClient(url, key, {
     auth: { persistSession: false },
   });
   return client;
