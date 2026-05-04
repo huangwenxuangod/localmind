@@ -16,7 +16,9 @@ Demo MVP 核心版。已完成：
 
 - 长文本 demo planner（固定杭州西湖区，下午默认 14:00-18:00）
 - LLM 规划草稿 + 规则代码审核，不做多 Agent
+- Zod schema guard，LLM 草稿不合格自动 fallback
 - `TripBrief / PlanReasoning / PlanValidationItem` 新领域模型
+- `PlanScore` 五维评分模型
 - 单最佳行程卡展示
 - 推荐理由、隐性偏好、可执行性校验展示
 - Supabase 持久化失败中断，不再吞错
@@ -31,9 +33,9 @@ Demo MVP 核心版。已完成：
 - Supabase 是 demo 的状态源；写库失败要直接暴露给前端
 - 当前 `tasks.type` 只是旧表兼容字段，不能驱动产品逻辑
 - LLM 原始草稿写入 system_logs，便于调试规划质量
+- Supabase schema v2 已将 `brief/reasoning/validation/score/planner_source/llm_draft` 升为一等字段
 
 ## 下一步
 
-- 用 Zod 或等价 schema 做运行时强校验
 - 增加真实距离/地图/商圈数据
 - 完善换一家后的路线级重新评分

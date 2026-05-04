@@ -12,6 +12,7 @@ import type {
   TripBrief,
   PlanReasoning,
   PlanValidationItem,
+  PlanScore,
 } from "@/types";
 
 type StoredPlanIntent = ParsedIntent & {
@@ -23,7 +24,15 @@ type StoredPlanIntent = ParsedIntent & {
 type PlanRow = {
   id: string;
   session_id: string;
-  intent: StoredPlanIntent;
+  intent?: StoredPlanIntent;
+  raw_input?: string;
+  brief?: TripBrief;
+  reasoning?: PlanReasoning;
+  validation?: PlanValidationItem[];
+  score?: PlanScore;
+  planner_source?: "llm" | "local";
+  llm_draft?: unknown;
+  fallback_reason?: string | null;
   status: PlanStatus;
   constraint_level: number;
   created_at: string;
@@ -35,6 +44,8 @@ type TaskRow = {
   plan_id: string;
   type: TaskType;
   business_type: BusinessType;
+  title?: string;
+  description?: string | null;
   merchant: Task["merchant"];
   candidate_merchants: Task["candidateMerchants"];
   start_time: string;
@@ -45,6 +56,9 @@ type TaskRow = {
   retry_count: number;
   failure_reason: string | null;
   replaced_from: string | null;
+  why_recommended?: string | null;
+  suitability_tags?: string[];
+  validation?: PlanValidationItem[];
 };
 
 type SessionRow = {
@@ -56,17 +70,46 @@ type SessionRow = {
 };
 
 function mapPlan(row: PlanRow): Plan {
-  const { __brief, __reasoning, __validation, ...intent } = row.intent;
+  const fallbackIntent = row.intent;
+  const { __brief, __reasoning, __validation, ...legacyIntent } = fallbackIntent ?? {};
+  const legacyParsedIntent = legacyIntent as Partial<ParsedIntent>;
+  const rawInput = row.raw_input ?? legacyParsedIntent.rawInput ?? "";
+  const brief = row.brief ?? __brief;
+  const reasoning = row.reasoning ?? __reasoning;
+  const validation = row.validation ?? __validation;
+  const intent = Object.keys(legacyIntent).length > 0
+    ? legacyParsedIntent as ParsedIntent
+    : {
+        startTime: brief?.timeWindow.startTime ?? new Date().toISOString(),
+        endTime: brief?.timeWindow.endTime ?? new Date().toISOString(),
+        location: brief?.area ?? "西湖区",
+        radiusKm: 3,
+        transport: "auto",
+        scene: brief?.preferences.includes("亲子友好") ? "family" : "general",
+        headcount: (brief?.participants.adults ?? 1) + (brief?.participants.children ?? 0),
+        dietary: [],
+        preferences: brief?.preferences ?? [],
+        requestedTypes: [],
+        rawInput,
+        contradictions: brief?.ambiguities ?? [],
+        corrections: brief?.assumptions ?? [],
+      } satisfies ParsedIntent;
+
   return {
     id: row.id,
     sessionId: row.session_id,
     intent,
-    brief: __brief,
+    rawInput,
+    brief,
     tasks: [],
     status: row.status,
-    constraintLevel: row.constraint_level,
-    reasoning: __reasoning,
-    validation: __validation,
+    constraintLevel: row.constraint_level ?? 0,
+    reasoning,
+    validation,
+    score: row.score,
+    plannerSource: row.planner_source,
+    llmDraft: row.llm_draft,
+    fallbackReason: row.fallback_reason ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -78,8 +121,8 @@ function mapTask(row: TaskRow): Task {
     planId: row.plan_id,
     type: row.type,
     businessType: row.business_type,
-    title: row.merchant?.name ?? row.business_type,
-    description: row.business_type,
+    title: row.title ?? row.merchant?.name ?? row.business_type,
+    description: row.description ?? row.business_type,
     merchant: row.merchant,
     candidateMerchants: row.candidate_merchants,
     startTime: row.start_time,
@@ -90,6 +133,9 @@ function mapTask(row: TaskRow): Task {
     retryCount: row.retry_count,
     failureReason: row.failure_reason,
     replacedFrom: row.replaced_from,
+    whyRecommended: row.why_recommended ?? undefined,
+    suitabilityTags: row.suitability_tags ?? undefined,
+    validation: row.validation ?? undefined,
   };
 }
 
@@ -134,6 +180,14 @@ export async function upsertPlan(plan: Plan) {
   const { error } = await getDb().from("plans").upsert({
     id: plan.id,
     session_id: plan.sessionId,
+    raw_input: plan.rawInput ?? plan.intent.rawInput,
+    brief: plan.brief,
+    reasoning: plan.reasoning,
+    validation: plan.validation,
+    score: plan.score,
+    planner_source: plan.plannerSource ?? "local",
+    llm_draft: plan.llmDraft ?? null,
+    fallback_reason: plan.fallbackReason ?? null,
     intent: storedIntent,
     status: plan.status,
     constraint_level: plan.constraintLevel,
@@ -151,6 +205,8 @@ export async function upsertTasks(tasks: Task[]) {
     plan_id: t.planId,
     type: t.type,
     business_type: t.businessType,
+    title: t.title ?? t.merchant?.name ?? t.businessType,
+    description: t.description ?? null,
     merchant: t.merchant,
     candidate_merchants: t.candidateMerchants,
     start_time: t.startTime,
@@ -161,6 +217,9 @@ export async function upsertTasks(tasks: Task[]) {
     retry_count: t.retryCount,
     failure_reason: t.failureReason,
     replaced_from: t.replacedFrom,
+    why_recommended: t.whyRecommended ?? null,
+    suitability_tags: t.suitabilityTags ?? [],
+    validation: t.validation ?? [],
     updated_at: new Date().toISOString(),
   }));
   const { error } = await getDb().from("tasks").upsert(rows);

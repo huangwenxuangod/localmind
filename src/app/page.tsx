@@ -297,8 +297,15 @@ export default function HomePage() {
               <>
                 <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                   <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-blue-700">{plan.brief?.city}{plan.brief?.area}</p>
+                  <div>
+                      <p className="text-sm font-medium text-blue-700">
+                        {plan.brief?.city}{plan.brief?.area}
+                        {plan.plannerSource && (
+                          <span className="ml-2 rounded-md bg-blue-50 px-2 py-1 text-xs text-blue-700">
+                            {plan.plannerSource === "llm" ? "LLM 草稿 + 规则校验" : "本地规则兜底"}
+                          </span>
+                        )}
+                      </p>
                       <h2 className="mt-1 text-2xl font-bold">{plan.reasoning?.summary ?? "推荐行程"}</h2>
                       <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">{plan.brief?.userGoal}</p>
                     </div>
@@ -316,7 +323,7 @@ export default function HomePage() {
                     <InfoBlock title="时间窗口" value={`${formatTime(plan.intent.startTime)}-${formatTime(plan.intent.endTime)}`} />
                     <InfoBlock title="参与人" value={`${plan.brief?.participants.adults ?? 0} 位成人，${plan.brief?.participants.children ?? 0} 位儿童`} />
                     <InfoBlock title="偏好" value={plan.brief?.preferences.join("、") || "通用轻松出行"} />
-                    <InfoBlock title="假设" value={plan.brief?.assumptions.join("；") || "无额外假设"} />
+                    <InfoBlock title="方案评分" value={plan.score ? `${plan.score.total} / 100` : "待计算"} />
                   </div>
                 </section>
 
@@ -333,6 +340,25 @@ export default function HomePage() {
                 </section>
 
                 <section className="grid gap-5 lg:grid-cols-2">
+                  {plan.score && (
+                    <Panel title="方案评分">
+                      <div className="mb-4 flex items-end gap-2">
+                        <span className="text-4xl font-bold text-slate-900">{plan.score.total}</span>
+                        <span className="pb-1 text-sm text-slate-400">/ 100</span>
+                      </div>
+                      <div className="grid gap-2 text-sm">
+                        <ScoreBar label="时间合理" value={plan.score.timeFit} />
+                        <ScoreBar label="路线稳定" value={plan.score.routeFit} />
+                        <ScoreBar label="偏好匹配" value={plan.score.preferenceFit} />
+                        <ScoreBar label="商家可靠" value={plan.score.merchantFit} />
+                        <ScoreBar label="节奏轻松" value={plan.score.relaxationFit} />
+                      </div>
+                      <div className="mt-4 space-y-2 text-sm leading-6 text-slate-600">
+                        {plan.score.reasons.map((reason) => <p key={reason}>{reason}</p>)}
+                      </div>
+                    </Panel>
+                  )}
+
                   <Panel title="可执行性校验">
                     <div className="grid gap-2">
                       {(plan.validation ?? []).map((item) => (
@@ -346,6 +372,9 @@ export default function HomePage() {
 
                   <Panel title="Agent 推理摘要">
                     <div className="space-y-3 text-sm leading-6 text-slate-600">
+                      {(plan.brief?.assumptions ?? []).map((item) => (
+                        <p key={item} className="rounded-md bg-blue-50 p-3 text-blue-800">{item}</p>
+                      ))}
                       {(plan.reasoning?.whyThisWorks ?? []).map((item) => (
                         <p key={item}>{item}</p>
                       ))}
@@ -385,6 +414,20 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
     <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <h3 className="mb-4 text-sm font-bold text-slate-800">{title}</h3>
       {children}
+    </div>
+  );
+}
+
+function ScoreBar({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <div className="mb-1 flex justify-between text-xs font-medium text-slate-500">
+        <span>{label}</span>
+        <span>{value}</span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+        <div className="h-full rounded-full bg-blue-600" style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
+      </div>
     </div>
   );
 }

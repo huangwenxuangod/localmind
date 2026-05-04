@@ -30,6 +30,8 @@ This version has breaking changes — APIs, conventions, and file structure may 
 8. LLM 或启发式规划输出必须经过运行时校验，不能直接进入执行/持久化
 9. 换一家只替换当前卡片，默认不改变其他任务时间，但必须重新校验时间/通勤
 10. 不做多 Agent；LLM 只产出规划草稿，可信决策由规则代码完成
+11. LLM 草稿必须通过 Zod schema guard；失败时走本地 planner
+12. 方案必须生成 PlanScore，用于证明可执行性和推荐质量
 
 ## 环境变量
 
@@ -47,6 +49,7 @@ SUPABASE_SERVICE_ROLE_KEY=      # 服务端写入用
 - `/api/run` 负责长文本理解、LLM 草稿/本地兜底、规则校验、持久化和输出 `plan_ready`
 - 用户确认后由 `/api/execute-plan` 执行已保存方案
 - `/api/replace-task` 支持行程卡「换一家」并返回替换后校验
+- Supabase schema v2 使用 `plans.brief/reasoning/validation/score/planner_source/llm_draft`
 - Supabase 读取层必须做 snake_case → camelCase 映射，禁止直接 `data as Plan/Task/Session`
 - 当前 Supabase `tasks.type` 是历史兼容字段，产品逻辑不要使用它
 - Next.js 16.2.4 变更较大，写 Route Handler 前先读 `node_modules/next/dist/docs/`

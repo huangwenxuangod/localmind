@@ -6,12 +6,14 @@ import type {
   ParsedIntent,
   Plan,
   PlanReasoning,
+  PlanScore,
   PlanValidationItem,
   Task,
   TransportMode,
   TripBrief,
 } from "@/types";
 import { MOCK_MERCHANTS } from "@/mock/merchants";
+import { PlanDraftSchema, type PlanDraft, type PlanDraftStep } from "./draft-schema";
 
 const DEFAULT_CITY = "杭州";
 const DEFAULT_AREA = "西湖区";
@@ -45,26 +47,6 @@ const TYPE_LABEL: Record<BusinessType, string> = {
   leisure: "亲子休闲",
   sport: "轻运动",
   culture: "文化展馆",
-};
-
-type LlmItineraryStepDraft = {
-  businessType?: unknown;
-  durationMin?: unknown;
-  goal?: unknown;
-  whyRecommended?: unknown;
-  suitabilityTags?: unknown;
-};
-
-type LlmPlanDraft = {
-  userGoal?: unknown;
-  preferences?: unknown;
-  constraints?: unknown;
-  assumptions?: unknown;
-  ambiguities?: unknown;
-  participantNotes?: unknown;
-  itinerary?: unknown;
-  whyThisWorks?: unknown;
-  hiddenInsights?: unknown;
 };
 
 export type ItineraryBuildDebug = {
@@ -235,11 +217,6 @@ function asStringArray(value: unknown): string[] {
   return typeof value === "string" && value.trim() ? [value] : [];
 }
 
-function asStepDrafts(value: unknown): LlmItineraryStepDraft[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is LlmItineraryStepDraft => !!item && typeof item === "object");
-}
-
 function isBusinessType(value: unknown): value is BusinessType {
   return typeof value === "string" && Object.prototype.hasOwnProperty.call(DWELL_DURATION, value);
 }
@@ -255,7 +232,7 @@ function mergeUnique(...groups: string[][]): string[] {
   return Array.from(new Set(groups.flat().map((item) => item.trim()).filter(Boolean)));
 }
 
-async function buildLlmPlanDraft(rawInput: string, inferred: TripBrief): Promise<LlmPlanDraft | null> {
+async function buildLlmPlanDraft(rawInput: string, inferred: TripBrief): Promise<PlanDraft | null> {
   const apiKey = process.env.OPENAI_API_KEY;
   const baseURL = process.env.ARK_BASE_URL;
   const model = process.env.ARK_MODEL_ID;
@@ -331,10 +308,15 @@ async function buildLlmPlanDraft(rawInput: string, inferred: TripBrief): Promise
   const text = response.choices[0]?.message?.content ?? "";
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error("LLM plan draft did not contain JSON");
-  return JSON.parse(jsonMatch[0]) as LlmPlanDraft;
+  const rawDraft = JSON.parse(jsonMatch[0]) as unknown;
+  const parsed = PlanDraftSchema.safeParse(rawDraft);
+  if (!parsed.success) {
+    throw new Error(`LLM plan draft schema invalid: ${parsed.error.issues.map((issue) => issue.path.join(".")).join(", ")}`);
+  }
+  return parsed.data;
 }
 
-function mergeBriefWithDraft(inferred: TripBrief, draft: LlmPlanDraft | null): TripBrief {
+function mergeBriefWithDraft(inferred: TripBrief, draft: PlanDraft | null): TripBrief {
   if (!draft) return inferred;
   return {
     ...inferred,
@@ -350,16 +332,14 @@ function mergeBriefWithDraft(inferred: TripBrief, draft: LlmPlanDraft | null): T
   };
 }
 
-function businessTypesFromDraft(rawInput: string, brief: TripBrief, draft: LlmPlanDraft | null): BusinessType[] {
-  const draftedTypes = asStepDrafts(draft?.itinerary)
-    .map((step) => step.businessType)
-    .filter(isBusinessType);
+function businessTypesFromDraft(rawInput: string, brief: TripBrief, draft: PlanDraft | null): BusinessType[] {
+  const draftedTypes = draft?.itinerary.map((step) => step.businessType).filter(isBusinessType) ?? [];
   if (draftedTypes.length > 0) return Array.from(new Set(draftedTypes));
   return inferBusinessTypes(rawInput, brief);
 }
 
-function stepDraftForType(draft: LlmPlanDraft | null, type: BusinessType, index: number): LlmItineraryStepDraft | undefined {
-  const steps = asStepDrafts(draft?.itinerary);
+function stepDraftForType(draft: PlanDraft | null, type: BusinessType, index: number): PlanDraftStep | undefined {
+  const steps = draft?.itinerary ?? [];
   return steps.find((step) => step.businessType === type) ?? steps[index];
 }
 
@@ -428,7 +408,7 @@ function taskValidation(merchant: Merchant | null, brief: TripBrief, startTime: 
   return items;
 }
 
-function buildReasoning(brief: TripBrief, tasks: Task[], draft: LlmPlanDraft | null): PlanReasoning {
+function buildReasoning(brief: TripBrief, tasks: Task[], draft: PlanDraft | null): PlanReasoning {
   const whyThisWorks = asStringArray(draft?.whyThisWorks);
   const hiddenInsights = asStringArray(draft?.hiddenInsights);
 
@@ -500,9 +480,51 @@ function buildPlanValidation(tasks: Task[], brief: TripBrief): PlanValidationIte
   ];
 }
 
+function scorePlan(tasks: Task[], brief: TripBrief, validation: PlanValidationItem[]): PlanScore {
+  const hasFail = validation.some((item) => item.status === "fail");
+  const timeFit = hasFail ? 45 : 92;
+  const routeFit = tasks.every((task) => task.travelToNextMin >= 0) ? 86 : 50;
+  const merchantFit = Math.round(
+    tasks.length
+      ? tasks.reduce((sum, task) => sum + (task.merchant?.rating ?? 3.5) * 20, 0) / tasks.length
+      : 50
+  );
+  const preferenceSignals = tasks.flatMap((task) => task.suitabilityTags ?? []);
+  const matchedPreferences = brief.preferences.filter((preference) =>
+    preferenceSignals.some((signal) => signal.includes(preference) || preference.includes(signal))
+  ).length;
+  const preferenceFit = brief.preferences.length
+    ? Math.min(95, 65 + Math.round((matchedPreferences / brief.preferences.length) * 30))
+    : 78;
+  const relaxationFit = tasks.length <= 3 ? 90 : 70;
+  const total = Math.round(
+    timeFit * 0.25 +
+    routeFit * 0.2 +
+    preferenceFit * 0.25 +
+    merchantFit * 0.2 +
+    relaxationFit * 0.1
+  );
+
+  return {
+    total,
+    timeFit,
+    routeFit,
+    preferenceFit,
+    merchantFit,
+    relaxationFit,
+    reasons: [
+      `时间适配 ${timeFit}：${hasFail ? "存在时间风险" : "全部任务落在时间窗口内"}`,
+      `路线适配 ${routeFit}：已预留通勤缓冲`,
+      `偏好适配 ${preferenceFit}：覆盖 ${matchedPreferences}/${brief.preferences.length || 1} 个显性/隐性偏好`,
+      `商家可靠 ${merchantFit}：基于评分、营业和候选稳定度`,
+      `节奏轻松 ${relaxationFit}：${tasks.length <= 3 ? "少而稳，不赶场" : "任务略多，可能偏赶"}`,
+    ],
+  };
+}
+
 export async function buildItineraryPlan(rawInput: string, sessionId: string): Promise<ItineraryBuildResult> {
   const inferredBrief = inferBrief(rawInput);
-  let draft: LlmPlanDraft | null = null;
+  let draft: PlanDraft | null = null;
   let fallbackReason: string | undefined;
 
   try {
@@ -598,9 +620,14 @@ export async function buildItineraryPlan(rawInput: string, sessionId: string): P
     constraintLevel: 0,
     reasoning: buildReasoning(brief, tasks, draft),
     validation: buildPlanValidation(tasks, brief),
+    score: undefined,
+    plannerSource: draft ? "llm" : "local",
+    llmDraft: draft ?? undefined,
+    fallbackReason,
     createdAt: now,
     updatedAt: now,
   };
+  plan.score = scorePlan(tasks, brief, plan.validation ?? []);
 
   return {
     plan,
@@ -616,9 +643,9 @@ function buildTaskReason(
   type: BusinessType,
   brief: TripBrief,
   merchant: Merchant | null,
-  draft?: LlmItineraryStepDraft
+  draft?: PlanDraftStep
 ): string {
-  if (typeof draft?.whyRecommended === "string" && draft.whyRecommended.trim()) {
+  if (draft?.whyRecommended?.trim()) {
     return draft.whyRecommended;
   }
   if (!merchant) return "当前类型暂未匹配到稳定候选，保留任务位等待替换";
@@ -634,7 +661,7 @@ function buildSuitabilityTags(
   type: BusinessType,
   brief: TripBrief,
   merchant: Merchant | null,
-  draft?: LlmItineraryStepDraft
+  draft?: PlanDraftStep
 ): string[] {
   const tags = new Set<string>([TYPE_LABEL[type]]);
   asStringArray(draft?.suitabilityTags).forEach((item) => tags.add(item));

@@ -100,6 +100,16 @@ export interface PlanReasoning {
   hiddenInsights: string[];
 }
 
+export interface PlanScore {
+  total: number;
+  timeFit: number;
+  routeFit: number;
+  preferenceFit: number;
+  merchantFit: number;
+  relaxationFit: number;
+  reasons: string[];
+}
+
 // ---- Merchant ----
 
 export interface Merchant {
@@ -129,6 +139,7 @@ export interface OpenHour {
 export interface Task {
   id: string;
   planId: string;
+  // DB v1 compatibility only. Product logic must not branch on this field.
   type: TaskType;
   businessType: BusinessType;
   title?: string;
@@ -143,6 +154,7 @@ export interface Task {
   suitabilityTags?: string[];
   validation?: PlanValidationItem[];
   status: TaskStatus;
+  // DB v1 compatibility fields.
   retryCount: number;
   failureReason: string | null;
   replacedFrom: string | null; // 被替换的原商家ID
@@ -154,12 +166,18 @@ export interface Plan {
   id: string;
   sessionId: string;
   intent: ParsedIntent;
+  rawInput?: string;
   brief?: TripBrief;
   tasks: Task[];
   status: PlanStatus;
+  // DB v1 compatibility only.
   constraintLevel: number;   // 约束降级层级 0=满约束 1=放大半径 2=放宽业态 3=放宽偏好
   reasoning?: PlanReasoning;
   validation?: PlanValidationItem[];
+  score?: PlanScore;
+  plannerSource?: "llm" | "local";
+  llmDraft?: unknown;
+  fallbackReason?: string;
   createdAt: string;
   updatedAt: string;
 }
