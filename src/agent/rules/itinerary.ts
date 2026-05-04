@@ -522,6 +522,44 @@ function scorePlan(tasks: Task[], brief: TripBrief, validation: PlanValidationIt
   };
 }
 
+type TaskSlot = {
+  type: BusinessType;
+  startTime: string;
+  endTime: string;
+  durationMin: number;
+  travelToNextMin: number;
+  stepDraft?: PlanDraftStep;
+};
+
+async function buildTaskFromSlot(slot: TaskSlot, planId: string, brief: TripBrief): Promise<Task> {
+  const candidates = candidatesFor(slot.type, brief, slot.startTime);
+  const merchant = candidates[0] ?? null;
+
+  return {
+    id: nanoid(),
+    planId,
+    type: "weak",
+    businessType: slot.type,
+    title: merchant?.name ?? TYPE_LABEL[slot.type],
+    description: typeof slot.stepDraft?.goal === "string" && slot.stepDraft.goal.trim()
+      ? slot.stepDraft.goal
+      : TYPE_LABEL[slot.type],
+    merchant,
+    candidateMerchants: candidates,
+    startTime: slot.startTime,
+    endTime: slot.endTime,
+    durationMin: slot.durationMin,
+    travelToNextMin: slot.travelToNextMin,
+    whyRecommended: buildTaskReason(slot.type, brief, merchant, slot.stepDraft),
+    suitabilityTags: buildSuitabilityTags(slot.type, brief, merchant, slot.stepDraft),
+    validation: taskValidation(merchant, brief, slot.startTime),
+    status: "ready",
+    retryCount: 0,
+    failureReason: null,
+    replacedFrom: null,
+  };
+}
+
 export async function buildItineraryPlan(rawInput: string, sessionId: string): Promise<ItineraryBuildResult> {
   const inferredBrief = inferBrief(rawInput);
   let draft: PlanDraft | null = null;
@@ -539,7 +577,7 @@ export async function buildItineraryPlan(rawInput: string, sessionId: string): P
   const planId = nanoid();
   const windowEnd = new Date(brief.timeWindow.endTime).getTime();
   const buffer = TRANSIT_BUFFER.auto;
-  const tasks: Task[] = [];
+  const slots: TaskSlot[] = [];
   let cursor = brief.timeWindow.startTime;
 
   for (let i = 0; i < requestedTypes.length; i++) {
@@ -549,62 +587,37 @@ export async function buildItineraryPlan(rawInput: string, sessionId: string): P
     const taskEnd = addMinutes(cursor, dwell);
     if (new Date(taskEnd).getTime() > windowEnd) break;
 
-    const candidates = candidatesFor(type, brief, cursor);
-    const merchant = candidates[0] ?? null;
     const isLastCandidate = requestedTypes.indexOf(type) === requestedTypes.length - 1;
-    const travelToNextMin = isLastCandidate ? 0 : buffer;
-
-    tasks.push({
-      id: nanoid(),
-      planId,
-      type: "weak",
-      businessType: type,
-      title: merchant?.name ?? TYPE_LABEL[type],
-      description: typeof stepDraft?.goal === "string" && stepDraft.goal.trim() ? stepDraft.goal : TYPE_LABEL[type],
-      merchant,
-      candidateMerchants: candidates,
+    slots.push({
+      type,
       startTime: cursor,
       endTime: taskEnd,
       durationMin: dwell,
-      travelToNextMin,
-      whyRecommended: buildTaskReason(type, brief, merchant, stepDraft),
-      suitabilityTags: buildSuitabilityTags(type, brief, merchant, stepDraft),
-      validation: taskValidation(merchant, brief, cursor),
-      status: "ready",
-      retryCount: 0,
-      failureReason: null,
-      replacedFrom: null,
+      travelToNextMin: isLastCandidate ? 0 : buffer,
+      stepDraft,
     });
 
     cursor = addMinutes(taskEnd, buffer);
   }
 
+  let tasks = await Promise.all(slots.map((slot) => buildTaskFromSlot(slot, planId, brief)));
+
   if (tasks.length === 0) {
     const type: BusinessType = "leisure";
     const dwell = Math.min(DWELL_DURATION[type], Math.max(45, (windowEnd - new Date(cursor).getTime()) / 60_000));
-    const candidates = candidatesFor(type, brief, cursor);
-    const merchant = candidates[0] ?? null;
-    tasks.push({
-      id: nanoid(),
-      planId,
-      type: "weak",
-      businessType: type,
-      title: merchant?.name ?? TYPE_LABEL[type],
-      description: "时间较短，自动压缩为单项轻松活动",
-      merchant,
-      candidateMerchants: candidates,
+    tasks = [await buildTaskFromSlot({
+      type,
       startTime: cursor,
       endTime: addMinutes(cursor, dwell),
       durationMin: dwell,
       travelToNextMin: 0,
+    }, planId, brief)];
+    tasks[0] = {
+      ...tasks[0],
+      planId,
+      description: "时间较短，自动压缩为单项轻松活动",
       whyRecommended: "时间窗口有限，优先保留一个低风险、可随时退出的活动",
-      suitabilityTags: buildSuitabilityTags(type, brief, merchant),
-      validation: taskValidation(merchant, brief, cursor),
-      status: "ready",
-      retryCount: 0,
-      failureReason: null,
-      replacedFrom: null,
-    });
+    };
   }
 
   const intent = buildIntentFromBrief(rawInput, brief, requestedTypes);

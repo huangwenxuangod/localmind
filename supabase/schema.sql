@@ -1,6 +1,7 @@
 -- MiniClaw · 美团同城行程规划 Agent Demo Schema v2
 -- 在 Supabase SQL Editor 中执行。可重复执行。
--- Demo 运行时所有写入都走 Next.js API + SUPABASE_SERVICE_ROLE_KEY。
+-- Demo 运行时所有写入都走 Next.js API；可用 secret/service_role key，
+-- 也可用 publishable/anon key + 下方 demo RLS policy。
 
 -- 1. 会话表
 CREATE TABLE IF NOT EXISTS sessions (
@@ -31,7 +32,15 @@ CREATE TABLE IF NOT EXISTS plans (
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 兼容旧版本：旧代码曾把全部 plan payload 塞进 intent/constraint_level。
+-- 兼容旧版本：CREATE TABLE IF NOT EXISTS 不会给旧表补列，所以这里显式补齐 v2 列。
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS raw_input TEXT NOT NULL DEFAULT '';
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS brief JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS reasoning JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS validation JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS score JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS planner_source TEXT NOT NULL DEFAULT 'local';
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS llm_draft JSONB;
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS fallback_reason TEXT;
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS intent JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE plans ADD COLUMN IF NOT EXISTS constraint_level INT NOT NULL DEFAULT 0;
 DO $$
@@ -72,7 +81,12 @@ CREATE TABLE IF NOT EXISTS tasks (
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 兼容旧版本：不再作为产品逻辑使用。
+-- 兼容旧版本：补齐 v2 行程卡列；type/retry_count 不再作为产品逻辑使用。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS description TEXT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS why_recommended TEXT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS suitability_tags TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS validation JSONB NOT NULL DEFAULT '[]';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'weak';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS retry_count INT NOT NULL DEFAULT 0;
 
@@ -173,3 +187,5 @@ CREATE POLICY "demo_anon_all_system_logs"
   TO anon
   USING (true)
   WITH CHECK (true);
+
+NOTIFY pgrst, 'reload schema';

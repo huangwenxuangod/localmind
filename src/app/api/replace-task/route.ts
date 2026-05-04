@@ -49,44 +49,47 @@ export async function POST(req: Request) {
       alternatives = [...alternatives, ...extras];
     }
 
-    // 逐个校验并尝试替换
-    for (const alt of alternatives.slice(0, 5)) {
-      const valid = await validateMerchant(
-        alt.id,
-        task.startTime,
-        task.endTime,
-        headcount
+    const checkedAlternatives = await Promise.all(
+      alternatives.slice(0, 5).map(async (merchant) => ({
+        merchant,
+        validation: await validateMerchant(
+          merchant.id,
+          task.startTime,
+          task.endTime,
+          headcount
+        ),
+      }))
+    );
+    const replacement = checkedAlternatives.find((item) => item.validation.available);
+
+    if (replacement) {
+      const alt = replacement.merchant;
+      const updatedTask: Task = {
+        ...task,
+        title: alt.name,
+        whyRecommended: `已替换为同业态可用地点；${alt.rating.toFixed(1)} 分，仍保持原时间段和路线节奏`,
+        suitabilityTags: Array.from(new Set([task.businessType, ...alt.tags.slice(0, 2), ...(plan.brief?.preferences ?? [])])),
+        validation: [
+          { label: "时间可用", status: "pass", detail: "替换商家通过当前时段可用性校验" },
+          { label: "路线影响", status: "pass", detail: "保持同业态与原时间段，不改变后续行程时间" },
+        ],
+        merchant: alt,
+        status: "replaced",
+        replacedFrom: currentMerchantId || null,
+      };
+
+      await upsertTasks([updatedTask]);
+      const tasks = (await getTasksByPlanId(planId)).map((item) =>
+        item.id === taskId ? updatedTask : item
       );
+      const validation = validatePlanTiming(tasks);
 
-      if (valid.available) {
-        // 更新任务
-        const updatedTask: Task = {
-          ...task,
-          title: alt.name,
-          whyRecommended: `已替换为同业态可用地点；${alt.rating.toFixed(1)} 分，仍保持原时间段和路线节奏`,
-          suitabilityTags: Array.from(new Set([task.businessType, ...alt.tags.slice(0, 2), ...(plan.brief?.preferences ?? [])])),
-          validation: [
-            { label: "时间可用", status: "pass", detail: "替换商家通过当前时段可用性校验" },
-            { label: "路线影响", status: "pass", detail: "保持同业态与原时间段，不改变后续行程时间" },
-          ],
-          merchant: alt,
-          status: "replaced",
-          replacedFrom: currentMerchantId || null,
-        };
-
-        await upsertTasks([updatedTask]);
-        const tasks = (await getTasksByPlanId(planId)).map((item) =>
-          item.id === taskId ? updatedTask : item
-        );
-        const validation = validatePlanTiming(tasks);
-
-        return Response.json({
-          success: true,
-          task: updatedTask,
-          validation,
-          message: `已替换为: ${alt.name}`,
-        });
-      }
+      return Response.json({
+        success: true,
+        task: updatedTask,
+        validation,
+        message: `已替换为: ${alt.name}`,
+      });
     }
 
     return Response.json(
